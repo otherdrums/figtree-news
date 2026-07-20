@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}figtree-news{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="masthead">
+    <div class="wrap">
+      <h1><a href="/">figtree-news</a></h1>
+      <nav>
+        <a href="/">Front page</a>
+        <a href="/lineage">Lineage</a>
+        <a href="/api/sources">Sources (JSON)</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="wrap">
+    <p>Source-aware newspaper &middot; built on <a href="https://github.com/otherdrums/figtree">figtree</a> figments.</p>
+  </footer>
+</body>
+</html>

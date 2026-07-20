@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Lineage &middot; figtree-news{% endblock %}
+{% block content %}
+<h2>Lineage: who echoed whom</h2>
+{% if derivatives %}
+  <table class="board">
+    <tr><th>Original (first report)</th><th>Derivative (echo)</th></tr>
+    {% for d in derivatives %}
+      <tr>
+        <td>{% if d.original_url %}<a href="{{ d.original_url }}">link</a>{% else %}figment{% endif %}</td>
+        <td>{% if d.derivative_url %}<a href="{{ d.derivative_url }}">link</a>{% else %}figment{% endif %}</td>
+      </tr>
+    {% endfor %}
+  </table>
+{% else %}
+  <p class="muted">No derivative relationships detected yet.</p>
+{% endif %}
+
+<h2>Stories and their first reporter</h2>
+<ul class="stories">
+  {% for n in narratives %}
+    <li>
+      <a href="/narrative/{{ n.narrative_id }}">{{ n.entities[:6] | join(", ") or n.text[:80] }}</a>
+      &mdash; first by <a href="/source/{{ n.first_reporter }}">{{ n.first_reporter }}</a>
+    </li>
+  {% endfor %}
+</ul>
+{% endblock %}

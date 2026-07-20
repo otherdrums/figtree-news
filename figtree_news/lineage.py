@@ -1,0 +1,238 @@
+"""Lineage: who broke it first, who is derivative, and narrative/agenda maps.
+
+Pure CPU analysis over stored figments — no model required. Runs after
+ingestion (e.g. at the end of each crawler tick) and persists its findings as
+figments so the web UI can query them directly:
+
+* ``narrative:{key}``  — one figment per cluster of articles about the same
+  entities (the "story"). Carries the member article ids, the sources, the
+  first reporter, and the stance lean.
+* ``derivative:{orig}:{der}`` — an edge figment marking ``der`` as published
+  later than ``orig`` while covering the same story (an echo / derivative).
+
+Deterministic ids make the whole step idempotent: re-running overwrites the
+previous lineage rather than duplicating it.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from typing import Any
+
+from figtree import Figment, FigmentStore, Figtree
+
+_ENTITY_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*|[A-Z]{2,})\b")
+_STOP = {
+    "The", "This", "That", "These", "Those", "We", "They", "He", "She", "It",
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+    "January", "February", "March", "April", "May", "June", "July", "August",
+    "September", "October", "November", "December", "Reuters", "AP", "BBC",
+}
+
+
+def _entities(text: str) -> set[str]:
+    if not text:
+        return set()
+    toks = {t.strip(".") for t in _ENTITY_RE.findall(text)}
+    return {t for t in toks if t not in _STOP and len(t) > 2}
+
+
+def _parse_time(fig: Figment) -> datetime | None:
+    for key in ("published", "first_seen"):
+        raw = fig.meta.get(key)
+        if not raw:
+            continue
+        try:
+            if key == "first_seen":
+                return datetime.fromisoformat(raw)
+            dt = parsedate_to_datetime(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            continue
+    return None
+
+
+def _articles(store: FigmentStore) -> list[Figment]:
+    return [
+        f
+        for f in store.all()
+        if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()
+    ]
+
+
+def _cluster(articles: list[Figment]) -> list[list[Figment]]:
+    """Group articles that share at least one entity (union-find)."""
+    parent = {f.figment_id: f.figment_id for f in articles}
+    ent_to_ids: dict[str, list[str]] = {}
+    by_id = {f.figment_id: f for f in articles}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for f in articles:
+        for e in _entities(f.text):
+            ent_to_ids.setdefault(e, []).append(f.figment_id)
+
+    for ids in ent_to_ids.values():
+        for other in ids[1:]:
+            union(ids[0], other)
+
+    groups: dict[str, list[Figment]] = {}
+    for fid in parent:
+        groups.setdefault(find(fid), []).append(by_id[fid])
+    return [g for g in groups.values() if len(g) >= 2]
+
+
+def compute_lineage(store: FigmentStore) -> dict[str, Any]:
+    """Recompute lineage figments from the current store. Idempotent."""
+    articles = _articles(store)
+    clusters = _cluster(articles)
+    figments: list[Figment] = []
+    summaries: list[dict[str, Any]] = []
+
+    for group in clusters:
+        group = sorted(group, key=lambda f: _parse_time(f) or datetime.max.replace(tzinfo=timezone.utc))
+        times = [(f, _parse_time(f)) for f in group]
+        first = min(times, key=lambda ft: ft[1] or datetime.max.replace(tzinfo=timezone.utc))[0]
+        members = [f.figment_id for f in group]
+        sources = sorted({f.meta.get("source_id") for f in group})
+        key = hashlib.sha1("|".join(members).encode()).hexdigest()[:12]
+        narrative_id = f"narrative:{key}"
+
+        # Mark first reporter + derivatives on the article figments themselves.
+        updated_articles: list[Figment] = []
+        for f in group:
+            if f.figment_id == first.figment_id:
+                f.meta["first_reporter"] = True
+            else:
+                f.meta["derivative_of"] = first.figment_id
+                deriv_id = f"deriv:{first.figment_id}:{f.figment_id}"
+                figments.append(
+                    Figment.create(
+                        text=f"{f.meta.get('source_id')} echoed a story first reported by "
+                             f"{first.meta.get('source_id')}",
+                        boundary=first.boundary.copy(),
+                        meta={
+                            "edge_type": "derivative",
+                            "original": first.figment_id,
+                            "original_url": first.meta.get("url"),
+                            "derivative": f.figment_id,
+                            "derivative_url": f.meta.get("url"),
+                        },
+                        figment_id=deriv_id,
+                        sources=[first.figment_id],
+                        children=[f.figment_id],
+                    )
+                )
+            updated_articles.append(f)
+
+        narrative = Figment.create(
+            text=f"Story across {len(sources)} sources ({', '.join(sources)}); "
+                 f"first reported by {first.meta.get('source_id')}.",
+            boundary=first.boundary.copy(),
+            meta={
+                "edge_type": "narrative",
+                "members": members,
+                "sources": sources,
+                "first_reporter": first.figment_id,
+                "first_reporter_source": first.meta.get("source_id"),
+                "first_reporter_url": first.meta.get("url"),
+                "entities": sorted(set().union(*[_entities(f.text) for f in group])),
+            },
+            figment_id=narrative_id,
+        )
+        figments.append(narrative)
+        summaries.append(
+            {
+                "narrative_id": narrative_id,
+                "sources": sources,
+                "members": members,
+                "first_reporter": first.meta.get("source_id"),
+                "first_reporter_url": first.meta.get("url"),
+                "size": len(group),
+            }
+        )
+
+        # Persist article meta updates (first_reporter / derivative_of).
+        hidden = group[0].boundary.shape[0]
+        store.upsert(updated_articles, hidden_size=hidden)
+
+    if figments:
+        hidden = figments[0].boundary.shape[0]
+        store.upsert(figments, hidden_size=hidden)
+
+    return {"narratives": summaries, "edges": len(figments) - len(summaries)}
+
+
+def get_narratives(store: FigmentStore) -> list[dict[str, Any]]:
+    """Read persisted narrative figments for display."""
+    out = []
+    for f in store.all():
+        if f.meta.get("edge_type") == "narrative":
+            out.append(
+                {
+                    "narrative_id": f.figment_id,
+                    "sources": f.meta.get("sources", []),
+                    "members": f.meta.get("members", []),
+                    "first_reporter": f.meta.get("first_reporter_source"),
+                    "first_reporter_url": f.meta.get("first_reporter_url"),
+                    "entities": f.meta.get("entities", []),
+                    "text": f.text,
+                }
+            )
+    return out
+
+
+def get_derivatives(store: FigmentStore) -> list[dict[str, Any]]:
+    out = []
+    for f in store.all():
+        if f.meta.get("edge_type") == "derivative":
+            out.append(
+                {
+                    "original_url": f.meta.get("original_url"),
+                    "derivative_url": f.meta.get("derivative_url"),
+                    "derivative": f.meta.get("derivative"),
+                    "original": f.meta.get("original"),
+                }
+            )
+    return out
+
+
+def source_agenda(store: FigmentStore) -> dict[str, dict[str, Any]]:
+    """Per-source agenda lean: stories led vs echoed, and trust."""
+    graph = Figtree(store.all(), store=store)
+    analysis = graph.analyze_sources()
+    led = {}
+    echoed = {}
+    for n in get_narratives(store):
+        fr = n["first_reporter"]
+        led.setdefault(fr, 0)
+        led[fr] += 1
+        for s in n["sources"]:
+            if s != fr:
+                echoed.setdefault(s, 0)
+                echoed[s] += 1
+    agenda = {}
+    for src, info in analysis.items():
+        agenda[src] = {
+            "adjusted_trust": info["adjusted_trust"],
+            "base_trust": info["base_trust"],
+            "led": led.get(src, 0),
+            "echoed": echoed.get(src, 0),
+            "contradicting": info["contradicting"],
+            "agreeing": info["agreeing"],
+        }
+    return agenda

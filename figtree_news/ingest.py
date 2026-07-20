@@ -1,20 +1,29 @@
-"""Feed ingestion: turn articles into Figments.
+"""Feed ingestion: turn articles into Figments with full provenance.
 
 Each article becomes an Image Figment (parent) whose children are the
 sentence-level figments produced by ``figtree.ingest_text_to_figments``. The
 library already tags every figment with ``source_id`` and stamps the image
 with ``base_trust``, so the source's initial credibility flows into Figtree's
 trust propagation without any news-specific code living in the core library.
+
+This module additionally stamps **provenance** onto every figment returned by
+the library (``url``, ``published``, ``title``, ``first_seen``) and re-persists
+it, so the generated newspaper can always link back to the original article.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from figtree import FigmentStore, ingest_text_to_figments
 
 from .config import SourceRegistry
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _read_feed(uri: str, source_id: str) -> list[dict[str, Any]]:
@@ -46,6 +55,7 @@ def _read_feed(uri: str, source_id: str) -> list[dict[str, Any]]:
                 "source_id": source_id,
                 "text": text.strip(),
                 "url": entry.get("link"),
+                "title": entry.get("title"),
                 "author": entry.get("author"),
                 "published": entry.get("published"),
             }
@@ -60,7 +70,6 @@ def _read_article_file(path: str) -> list[dict[str, Any]]:
             return [json.loads(line) for line in fh if line.strip()]
         data = json.load(fh)
     if isinstance(data, dict):
-        # allow {"source_id": [...articles...]} shape
         if "articles" in data:
             return data["articles"]
         return [data]
@@ -76,13 +85,17 @@ def ingest_articles(
     kv_manager=None,
     compute_kv: bool = False,
     summarize_images: bool = False,
+    stamp_provenance: bool = True,
 ) -> dict[str, Any]:
     """Ingest a list of article dicts into the store.
 
-    Each article dict needs at least ``source_id`` and ``text``. Returns a
-    small stats dict (article/figment counts, sources touched).
+    Each article dict needs at least ``source_id`` and ``text``. When
+    ``stamp_provenance`` is True (default), ``url``/``published``/``title`` are
+    attached to every resulting figment and re-persisted.
+
+    Returns a small stats dict (article/figment counts, sources touched, urls).
     """
-    stats = {"articles": 0, "figments": 0, "sources": set()}
+    stats = {"articles": 0, "figments": 0, "sources": set(), "urls": []}
     for art in articles:
         sid = art["source_id"]
         text = art["text"]
@@ -100,9 +113,23 @@ def ingest_articles(
             compute_kv=compute_kv,
             summarize_images=summarize_images,
         )
+        if stamp_provenance:
+            url = art.get("url")
+            published = art.get("published")
+            title = art.get("title")
+            for f in figments:
+                f.meta["url"] = url
+                f.meta["published"] = published
+                f.meta["title"] = title
+                f.meta["first_seen"] = _now_iso()
+            hidden = figments[0].boundary.shape[0]
+            store.upsert(figments, hidden_size=hidden)
+
         stats["articles"] += 1
         stats["figments"] += len(figments)
         stats["sources"].add(sid)
+        if art.get("url"):
+            stats["urls"].append(art["url"])
     stats["sources"] = sorted(stats["sources"])
     return stats
 

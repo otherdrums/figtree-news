@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Front page &middot; figtree-news{% endblock %}
+{% block content %}
+<section class="brief">
+  <h2>World brief</h2>
+  {% if brief %}
+    <p>{{ brief }}</p>
+  {% else %}
+    <p class="muted">No brief generated yet. Run the crawler with summarization.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Top stories</h2>
+  {% if narratives %}
+    <ul class="stories">
+      {% for n in narratives %}
+        <li>
+          <a href="/narrative/{{ n.narrative_id }}">
+            {{ n.entities[:6] | join(", ") or n.text[:80] }}
+          </a>
+          <span class="meta">
+            {{ n.sources | length }} sources &middot;
+            first by
+            <a href="/source/{{ n.first_reporter }}">{{ n.first_reporter }}</a>
+            {% if n.first_reporter_url %}(<a href="{{ n.first_reporter_url }}">link</a>){% endif %}
+          </span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">No stories clustered yet. Ingest more articles.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Source trust board</h2>
+  <table class="board">
+    <tr><th>Source</th><th>Trust</th><th>Led</th><th>Echoed</th><th>Contradicts</th></tr>
+    {% for sid, info in agenda.items() %}
+      <tr>
+        <td><a href="/source/{{ sid }}">{{ sid }}</a></td>
+        <td>{{ "%.2f"|format(info.adjusted_trust) }}</td>
+        <td>{{ info.led }}</td>
+        <td>{{ info.echoed }}</td>
+        <td>{{ info.contradicting | join(", ") or "-" }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section>
+  <h2>Latest articles</h2>
+  <ul class="articles">
+    {% for a in articles %}
+      <li>
+        <a href="/article/{{ a.figment_id }}">{{ a.meta.get("title") or a.text[:80] }}</a>
+        <span class="meta">
+          <a href="/source/{{ a.meta.get('source_id') }}">{{ a.meta.get("source_id") }}</a>
+          {% if a.meta.get("url") %}&middot; <a href="{{ a.meta.get('url') }}">source</a>{% endif %}
+        </span>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

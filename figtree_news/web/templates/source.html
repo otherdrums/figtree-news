@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Source {{ sid }} &middot; figtree-news{% endblock %}
+{% block content %}
+<h2>Source: {{ sid }}</h2>
+{% if info %}
+  <p class="meta">
+    Adjusted trust {{ "%.2f"|format(info.adjusted_trust) }}
+    (base {{ "%.2f"|format(info.base_trust) }}) &middot;
+    Stories led: {{ info.led }} &middot; Echoed: {{ info.echoed }}
+  </p>
+  {% if info.contradicting %}
+    <p>Contradicts: {{ info.contradicting | join(", ") }}</p>
+  {% endif %}
+{% endif %}
+
+<h3>Articles from this source</h3>
+<ul class="articles">
+  {% for a in articles %}
+    <li>
+      <a href="/article/{{ a.figment_id }}">{{ a.meta.get("title") or a.text[:80] }}</a>
+      {% if a.meta.get("url") %}&middot; <a href="{{ a.meta.get('url') }}">source</a>{% endif %}
+    </li>
+  {% endfor %}
+</ul>
+
+<h3>Narratives this source participates in</h3>
+<ul>
+  {% for n in narratives %}
+    <li>
+      <a href="/narrative/{{ n.narrative_id }}">{{ n.entities[:6] | join(", ") or n.text[:80] }}</a>
+      {% if n.first_reporter == sid %}<span class="tag">led</span>{% endif %}
+    </li>
+  {% endfor %}
+</ul>
+{% endblock %}
