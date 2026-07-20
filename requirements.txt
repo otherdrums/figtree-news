@@ -1,0 +1,10 @@
+# figtree-news runtime dependencies.
+#
+# IMPORTANT: `figtree` is the core library and is NOT published to PyPI yet.
+# Install it from its sibling repo BEFORE this package, e.g.:
+#     pip install -e ../figtree
+# (or `pip install figtree` once it is published). Its own heavy deps
+# (torch, transformers, lancedb, numpy, sentencepiece, ...) come along with it.
+figtree
+typer>=0.12
+feedparser>=6.0

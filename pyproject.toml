@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "figtree-news"
+version = "0.1.0"
+description = "Source-aware news aggregator built on Figtree figments"
+requires-python = ">=3.10"
+# `figtree` is installed from the sibling repo (see requirements.txt).
+# For a local install you can instead declare it as a path dependency:
+#   figtree = { path = "../figtree", editable = true }
+dependencies = [
+    "figtree",
+    "typer>=0.12",
+    "feedparser>=6.0",
+]
+
+[project.scripts]
+figtree-news = "figtree_news.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["figtree_news*"]

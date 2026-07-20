@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Env
+.venv/
+.venv_f39/
+
+# Data / outputs (keep the code, not the ingested stores)
+*.lance/
+graph.json
+eval_report.json
+
+# IDE
+.idea/
+.vscode/
