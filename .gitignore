@@ -14,6 +14,7 @@ dist/
 *.lance/
 graph.json
 eval_report.json
+seen_urls.json
 
 # IDE
 .idea/

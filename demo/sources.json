@@ -1,0 +1,14 @@
+{
+  "bbc":      { "name": "BBC News", "base_trust": 0.9, "url": "https://www.bbc.com/news", "kind": "news" },
+  "aljazeera":{ "name": "Al Jazeera", "base_trust": 0.85, "url": "https://www.aljazeera.com/", "kind": "news" },
+  "npr":      { "name": "NPR", "base_trust": 0.9, "url": "https://www.npr.org/", "kind": "news" },
+  "guardian": { "name": "The Guardian", "base_trust": 0.85, "url": "https://www.theguardian.com/", "kind": "news" },
+
+  "feeds": {
+    "bbc": "http://feeds.bbci.co.uk/news/rss.xml",
+    "aljazeera": "https://www.aljazeera.com/xml/rss/all.xml",
+    "npr": "https://feeds.npr.org/1001/rss.xml",
+    "guardian": "https://www.theguardian.com/world/rss"
+  },
+  "seeds": []
+}

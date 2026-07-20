@@ -115,6 +115,7 @@ def crawl_cmd(
     max_depth: int = typer.Option(1, "--max-depth"),
     max_pages: int = typer.Option(50, "--max-pages"),
     seen_path: str = typer.Option("./seen_urls.json"),
+    max_articles: int = typer.Option(40, "--max-articles", help="Cap articles ingested per run"),
     model_id: str = typer.Option("unsloth/Qwen3-4B-bnb-4bit"),
     compute_kv: bool = False,
     summarize: bool = True,
@@ -139,7 +140,7 @@ def crawl_cmd(
     )
 
     def tick():
-        s = crawler.run_once(feeds, seeds)
+        s = crawler.run_once(feeds, seeds, max_articles=max_articles)
         p = pipeline_mod.run_pipeline(
             model, tokenizer, store, do_summaries=not no_summaries, do_brief=True
         )

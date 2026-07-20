@@ -183,10 +183,12 @@ class Crawler:
             self._mark(url)
         return True
 
-    def crawl_feed(self, source_id: str, feed_uri: str) -> int:
+    def crawl_feed(self, source_id: str, feed_uri: str, max_articles: int | None = None) -> int:
         articles = _read_feed(feed_uri, source_id)
         added = 0
         for art in articles:
+            if max_articles is not None and added >= max_articles:
+                break
             if self.ingest_article(source_id, art):
                 added += 1
         return added
@@ -227,12 +229,24 @@ class Crawler:
         return added
 
     # -- orchestration ----------------------------------------------------- #
-    def run_once(self, feeds: dict[str, str], seeds: list[str]) -> dict:
+    def run_once(
+        self, feeds: dict[str, str], seeds: list[str], max_articles: int | None = None
+    ) -> dict:
         stats = {"feeds_added": 0, "seeds_added": 0, "sources": set()}
+        # Spread the budget across feeds so no single source dominates a run.
+        per = None
+        if max_articles is not None and feeds:
+            per = max(1, max_articles // len(feeds))
+        budget = max_articles
         for sid, uri in feeds.items():
-            stats["feeds_added"] += self.crawl_feed(sid, uri)
+            if budget is not None and budget <= 0:
+                break
+            got = self.crawl_feed(sid, uri, max_articles=per)
+            stats["feeds_added"] += got
+            if budget is not None:
+                budget -= got
             stats["sources"].add(sid)
-        if seeds:
+        if seeds and (budget is None or budget > 0):
             stats["seeds_added"] = self.crawl_seeds(seeds)
         stats["sources"] = sorted(stats["sources"])
         return stats

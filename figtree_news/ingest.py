@@ -43,11 +43,17 @@ def _read_feed(uri: str, source_id: str) -> list[dict[str, Any]]:
     parsed = feedparser.parse(uri)
     articles: list[dict[str, Any]] = []
     for entry in getattr(parsed, "entries", []):
-        text = (entry.get("summary") or "") + "\n\n" + (entry.get("content") or "")
-        if isinstance(entry.get("content"), list):
-            text = (entry.get("summary") or "") + "\n\n" + " ".join(
-                c.get("value", "") for c in entry["content"]
+        summary = entry.get("summary") or ""
+        content = entry.get("content")
+        if isinstance(content, list):
+            body = " ".join(
+                c.get("value", "") for c in content if isinstance(c, dict)
             )
+        elif isinstance(content, str):
+            body = content
+        else:
+            body = ""
+        text = (summary + "\n\n" + body).strip() if body else summary
         if not text.strip():
             continue
         articles.append(
