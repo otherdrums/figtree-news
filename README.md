@@ -123,9 +123,36 @@ pytest tests/
 ```
 
 End-to-end crawl/ingest/summarize/query/eval require a GPU and the reference
-model. For 24/7 operation on a home server or cloud box, run the `crawl --loop`
-process (GPU) and the `serve` process (CPU) under a process manager
-(systemd / docker-compose / pm2); both share the same LanceDB store.
+model. For 24/7 operation, run the two processes as systemd services (see
+below) — no containers needed.
+
+## Deployment with systemd (no containers)
+
+Two services share the same LanceDB store: a continuous **crawler** (GPU) and
+the **web** viewer (CPU).
+
+```bash
+# from the repo root
+./systemd/install_systemd.sh            # user services (~/.config/systemd/user)
+# or, as root, for a system-wide service:
+./systemd/install_systemd.sh --system   # writes to /etc/systemd/system
+
+# then:
+systemctl --user enable --now figtree-news-crawler figtree-news-web
+# (for user services, also: loginctl enable-linger "$USER"
+#  so they keep running without an active login session)
+```
+
+* The crawler runs continuously by default (`figtree-news crawl` == `--loop`);
+  pass `--once` for a single tick.
+* The web service binds `127.0.0.1:8000`; put nginx/caddy in front to expose
+  it. It is CPU-only and reads the shared store, so the crawler can hold the
+  GPU without affecting browsing.
+* Both services restart automatically on failure (`Restart=on-failure`).
+
+Before starting the crawler, create `sources.json` (see
+`examples/sample_sources.json`) with your outlets' `base_trust` and, optionally,
+`feeds`/`seeds` keys for the `crawl` command.
 
 ## Scope
 

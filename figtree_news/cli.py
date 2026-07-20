@@ -109,7 +109,8 @@ def crawl_cmd(
     sources: str = typer.Option("./sources.json"),
     feed: list[str] = typer.Option([], "--feed", help="source=url (repeatable)"),
     seed: list[str] = typer.Option([], "--seed", help="seed URL (repeatable)"),
-    loop: bool = typer.Option(False, "--loop", help="Run continuously"),
+    loop: bool = typer.Option(True, "--loop", help="Run continuously (default)"),
+    once: bool = typer.Option(False, "--once", help="Run a single tick and exit"),
     interval: int = typer.Option(3600, "--interval", help="Seconds between ticks"),
     max_depth: int = typer.Option(1, "--max-depth"),
     max_pages: int = typer.Option(50, "--max-pages"),
@@ -119,7 +120,13 @@ def crawl_cmd(
     summarize: bool = True,
     no_summaries: bool = False,
 ):
-    """Crawl feeds + seed URLs, then run the trust/lineage/summary pipeline."""
+    """Crawl feeds + seed URLs, then run the trust/lineage/summary pipeline.
+
+    Runs continuously by default (use --once for a single tick). Pair with the
+    systemd service so it starts at boot and restarts on failure.
+    """
+    if once:
+        loop = False
     model, tokenizer, store, registry = _load(model_id, db, sources)
     cfg_feeds, cfg_seeds = _crawl_config(sources)
     feeds = {**cfg_feeds, **_parse_feeds(feed)}

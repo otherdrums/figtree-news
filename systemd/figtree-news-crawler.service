@@ -1,0 +1,18 @@
+[Unit]
+Description=figtree-news continuous crawler
+Documentation=https://github.com/otherdrums/figtree-news
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__DIR__
+ExecStart=__PYTHON__ -m figtree_news.cli crawl --loop --db __DIR__/news.lance --sources __DIR__/sources.json
+Restart=on-failure
+RestartSec=30
+# Keep memory in check: the crawler loads the LLM each tick; let the OOM killer
+# prefer it over the web service if the box is tight.
+OOMScoreAdjust=300
+
+[Install]
+WantedBy=default.target

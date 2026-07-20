@@ -1,0 +1,17 @@
+[Unit]
+Description=figtree-news web newspaper (FastAPI)
+Documentation=https://github.com/otherdrums/figtree-news
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__DIR__
+# Bound to localhost by default; put a reverse proxy (nginx/caddy) in front if
+# you want to expose it. The viewer is CPU-only and reads the shared store.
+ExecStart=__PYTHON__ -m figtree_news.cli serve --db __DIR__/news.lance --sources __DIR__/sources.json --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
