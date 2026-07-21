@@ -116,8 +116,8 @@
       <input type="number" id="max-articles" value="40" min="1" max="200">
     </div>
     <div class="form-group">
-      <label>
-        <input type="checkbox" id="compute-kv"> Compute KV cache
+      <label title="Not available in web mode (requires KV manager configuration)">
+        <input type="checkbox" id="compute-kv" disabled> Compute KV cache (web only — disabled)
       </label>
     </div>
     <div class="form-group">
@@ -183,17 +183,29 @@ function updateCrawlUI(state) {
   document.getElementById('btn-crawl-continuous').disabled = crawlRunning;
   document.getElementById('btn-crawl-stop').disabled = !crawlRunning;
 
-  const showPanel = state.running || state.current_step !== 'idle';
+  const isDone = state.current_step === 'done';
+  const isError = state.current_step === 'error';
+  const showPanel = state.running || (!isDone && state.current_step !== 'idle') || isError;
   document.getElementById('progress-panel').style.display = showPanel ? 'block' : 'none';
 
-  document.getElementById('progress-step').textContent = state.current_step;
+  const stepEl = document.getElementById('progress-step');
+  stepEl.textContent = state.current_step;
+  stepEl.style.color = isError ? '#FF6B6B' : '';
+
   document.getElementById('progress-message').textContent = state.message;
   if (state.total > 0) {
     const pct = Math.round((state.progress / state.total) * 100);
     document.getElementById('progress-bar').style.width = pct + '%';
+    document.getElementById('progress-bar').style.background = isError ? '#FF6B6B' : '#0BD6AB';
   }
   if (state.stats && Object.keys(state.stats).length) {
     document.getElementById('progress-log').innerHTML = JSON.stringify(state.stats, null, 2);
+  }
+  if (isError) {
+    document.getElementById('progress-log').innerHTML = '<span style="color:#FF6B6B">' + (state.message || 'Unknown error') + '</span>';
+  }
+  if (isDone) {
+    setTimeout(() => { document.getElementById('progress-panel').style.display = 'none'; }, 5000);
   }
 }
 

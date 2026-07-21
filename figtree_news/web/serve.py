@@ -127,78 +127,86 @@ async def _run_crawl_task(
     _crawl_state["running"] = True
     _crawl_state["start_time"] = time.time()
     _crawl_state["current_step"] = "loading_model"
-    _crawl_state["message"] = "Loading model..."
+    _crawl_state["message"] = "Loading model (~5 min on first use)..."
     _crawl_state["progress"] = 0
     _crawl_state["total"] = 1
     await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
-    model, tokenizer = load_model(model_id)
-    _gen_cache["gen"] = FigmentGenerator(model, tokenizer)
+    try:
+        model, tokenizer = load_model(model_id)
+        _gen_cache["gen"] = FigmentGenerator(model, tokenizer)
 
-    store: FigmentStore = connect(db)
-    registry = SourceRegistry.load(sources_path)
+        store: FigmentStore = connect(db)
+        registry = SourceRegistry.load(sources_path)
 
-    crawler = Crawler(
-        model, tokenizer, store, registry,
-        seen_path="./seen_urls.json",
-        compute_kv=compute_kv, summarize_images=summarize,
-    )
+        # compute_kv requires a kv_manager which we don't configure in the web app.
+        crawler = Crawler(
+            model, tokenizer, store, registry,
+            seen_path="./seen_urls.json",
+            compute_kv=False, summarize_images=summarize,
+        )
 
-    _crawl_state["current_step"] = "crawling_feeds"
-    _crawl_state["message"] = f"Crawling {len(feeds)} feeds..."
-    _crawl_state["feeds"] = list(feeds.keys())
-    _crawl_state["total"] = len(feeds)
-    await _broadcast({"type": "crawl_status", "data": _crawl_state})
-
-    # Custom crawl with progress
-    stats = {"feeds_added": 0, "seeds_added": 0, "sources": set()}
-    per_feed = max(1, max_articles // len(feeds)) if feeds else max_articles
-    budget = max_articles
-
-    for i, (sid, uri) in enumerate(feeds.items()):
-        if budget <= 0:
-            break
-        _crawl_state["current_step"] = f"crawling_feed:{sid}"
-        _crawl_state["progress"] = i
-        _crawl_state["message"] = f"Crawling {sid} ({i+1}/{len(feeds)})"
+        _crawl_state["current_step"] = "crawling_feeds"
+        _crawl_state["message"] = f"Crawling {len(feeds)} feeds..."
+        _crawl_state["feeds"] = list(feeds.keys())
+        _crawl_state["total"] = len(feeds)
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
-        added = crawler.crawl_feed(sid, uri, max_articles=min(per_feed, budget))
-        stats["feeds_added"] += added
-        stats["sources"].add(sid)
-        budget -= added
+        stats = {"feeds_added": 0, "seeds_added": 0, "sources": set()}
+        per_feed = max(1, max_articles // len(feeds)) if feeds else max_articles
+        budget = max_articles
 
-    if seeds and budget > 0:
-        _crawl_state["current_step"] = "crawling_seeds"
-        _crawl_state["message"] = f"Crawling {len(seeds)} seed URLs..."
-        _crawl_state["total"] = len(seeds)
+        for i, (sid, uri) in enumerate(feeds.items()):
+            if budget <= 0:
+                break
+            _crawl_state["current_step"] = f"crawling_feed:{sid}"
+            _crawl_state["progress"] = i
+            _crawl_state["message"] = f"Crawling {sid} ({i+1}/{len(feeds)})"
+            await _broadcast({"type": "crawl_status", "data": _crawl_state})
+
+            added = crawler.crawl_feed(sid, uri, max_articles=min(per_feed, budget))
+            stats["feeds_added"] += added
+            stats["sources"].add(sid)
+            budget -= added
+
+        if seeds and budget > 0:
+            _crawl_state["current_step"] = "crawling_seeds"
+            _crawl_state["message"] = f"Crawling {len(seeds)} seed URLs..."
+            _crawl_state["total"] = len(seeds)
+            _crawl_state["progress"] = 0
+            await _broadcast({"type": "crawl_status", "data": _crawl_state})
+            added = crawler.crawl_seeds(seeds)
+            stats["seeds_added"] += added
+
+        _crawl_state["current_step"] = "pipeline"
+        _crawl_state["message"] = "Running pipeline (trust, lineage, summaries, brief)..."
         _crawl_state["progress"] = 0
+        _crawl_state["total"] = 4
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
-        added = crawler.crawl_seeds(seeds)
-        stats["seeds_added"] += added
 
-    _crawl_state["current_step"] = "pipeline"
-    _crawl_state["message"] = "Running pipeline (trust, lineage, summaries, brief)..."
-    _crawl_state["progress"] = 0
-    _crawl_state["total"] = 4
-    await _broadcast({"type": "crawl_status", "data": _crawl_state})
+        pipe_stats = run_pipeline(
+            model, tokenizer, store,
+            do_summaries=summarize, do_brief=True,
+        )
+        _crawl_state["progress"] = 4
+        await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
-    pipe_stats = run_pipeline(
-        model, tokenizer, store,
-        do_summaries=summarize, do_brief=True,
-    )
-    _crawl_state["progress"] = 4
-    await _broadcast({"type": "crawl_status", "data": _crawl_state})
+        stats["sources"] = sorted(stats["sources"])
+        stats.update(pipe_stats)
+        _crawl_state["stats"] = stats
+        _crawl_state["running"] = False
+        _crawl_state["current_step"] = "done"
+        _crawl_state["message"] = f"Done: {stats.get('feeds_added',0)} new articles, {stats.get('narratives',0)} narratives"
+        _data_cache["data"] = None
+        _warm_cache(store)
+        await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
-    stats["sources"] = sorted(stats["sources"])
-    stats.update(pipe_stats)
-    _crawl_state["stats"] = stats
-    _crawl_state["running"] = False
-    _crawl_state["current_step"] = "done"
-    _crawl_state["message"] = f"Done: {stats.get('feeds_added',0)} new articles, {stats.get('narratives',0)} narratives"
-    _data_cache["data"] = None
-    _warm_cache(store)
-    await _broadcast({"type": "crawl_status", "data": _crawl_state})
+    except Exception as exc:
+        _crawl_state["running"] = False
+        _crawl_state["current_step"] = "error"
+        _crawl_state["message"] = f"Error: {exc}"
+        await _broadcast({"type": "crawl_status", "data": _crawl_state})
+        raise
 
 
 def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> FastAPI:
