@@ -77,8 +77,8 @@ def build_world_brief(
     return {"brief": brief, "used": len(selected)}
 
 
-def get_world_brief(store: FigmentStore) -> str:
-    for f in store.all():
+def get_world_brief(store: FigmentStore, *, all_figs: list | None = None) -> str:
+    for f in all_figs if all_figs is not None else store.all():
         if f.figment_id == "brief:world":
             return f.text
     return ""

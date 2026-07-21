@@ -177,10 +177,10 @@ def compute_lineage(store: FigmentStore) -> dict[str, Any]:
     return {"narratives": summaries, "edges": len(figments) - len(summaries)}
 
 
-def get_narratives(store: FigmentStore) -> list[dict[str, Any]]:
+def get_narratives(store: FigmentStore, *, all_figs: list | None = None) -> list[dict[str, Any]]:
     """Read persisted narrative figments for display."""
     out = []
-    for f in store.all():
+    for f in all_figs if all_figs is not None else store.all():
         if f.meta.get("edge_type") == "narrative":
             out.append(
                 {
@@ -196,9 +196,9 @@ def get_narratives(store: FigmentStore) -> list[dict[str, Any]]:
     return out
 
 
-def get_derivatives(store: FigmentStore) -> list[dict[str, Any]]:
+def get_derivatives(store: FigmentStore, *, all_figs: list | None = None) -> list[dict[str, Any]]:
     out = []
-    for f in store.all():
+    for f in all_figs if all_figs is not None else store.all():
         if f.meta.get("edge_type") == "derivative":
             out.append(
                 {
@@ -211,13 +211,15 @@ def get_derivatives(store: FigmentStore) -> list[dict[str, Any]]:
     return out
 
 
-def source_agenda(store: FigmentStore) -> dict[str, dict[str, Any]]:
+def source_agenda(store: FigmentStore, *, all_figs: list | None = None) -> dict[str, dict[str, Any]]:
     """Per-source agenda lean: stories led vs echoed, and trust."""
-    graph = Figtree(store.all(), store=store)
+    figs = all_figs if all_figs is not None else store.all()
+    graph = Figtree(figs, store=store)
     analysis = graph.analyze_sources()
+    narrs = get_narratives(store, all_figs=figs)
     led = {}
     echoed = {}
-    for n in get_narratives(store):
+    for n in narrs:
         fr = n["first_reporter"]
         led.setdefault(fr, 0)
         led[fr] += 1

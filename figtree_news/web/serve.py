@@ -35,6 +35,7 @@ TEMPLATES_DIR = os.path.join(_HERE, "templates")
 STATIC_DIR = os.path.join(_HERE, "static")
 
 _gen_cache: dict[str, Any] = {}
+_data_cache: dict[str, Any] = {"data": None, "ts": 0.0}
 _crawl_state: dict[str, Any] = {
     "running": False,
     "task": None,
@@ -61,7 +62,10 @@ def _get_generator():
     return _gen_cache["gen"]
 
 
-def _build(store: FigmentStore) -> dict[str, Any]:
+def _build(store: FigmentStore, *, force: bool = False) -> dict[str, Any]:
+    now = time.time()
+    if not force and _data_cache["data"] and (now - _data_cache["ts"] < 30):
+        return _data_cache["data"]
     all_figs = store.all()
     by_id = {f.figment_id: f for f in all_figs}
     articles = [
@@ -69,11 +73,11 @@ def _build(store: FigmentStore) -> dict[str, Any]:
         for f in all_figs
         if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()
     ]
-    narratives = get_narratives(store)
-    derivatives = get_derivatives(store)
-    agenda = source_agenda(store)
-    brief = summarize_news.get_world_brief(store)
-    return {
+    narratives = get_narratives(store, all_figs=all_figs)
+    derivatives = get_derivatives(store, all_figs=all_figs)
+    agenda = source_agenda(store, all_figs=all_figs)
+    brief = summarize_news.get_world_brief(store, all_figs=all_figs)
+    result = {
         "articles": articles,
         "by_id": by_id,
         "narratives": narratives,
@@ -81,6 +85,9 @@ def _build(store: FigmentStore) -> dict[str, Any]:
         "agenda": agenda,
         "brief": brief,
     }
+    _data_cache["data"] = result
+    _data_cache["ts"] = now
+    return result
 
 
 async def _broadcast(msg: dict[str, Any]):
@@ -179,6 +186,7 @@ async def _run_crawl_task(
     _crawl_state["running"] = False
     _crawl_state["current_step"] = "done"
     _crawl_state["message"] = f"Done: {stats.get('feeds_added',0)} new articles, {stats.get('narratives',0)} narratives"
+    _data_cache["data"] = None
     await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
 
@@ -353,6 +361,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         do_brief = body.get("brief", True)
         model, tokenizer = load_model("unsloth/Qwen3-4B-bnb-4bit")
         stats = run_pipeline(model, tokenizer, store, do_summaries=do_summaries, do_brief=do_brief)
+        _data_cache["data"] = None
         return stats
 
     @app.post("/api/summaries/regenerate")
@@ -364,6 +373,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         model, tokenizer = load_model("unsloth/Qwen3-4B-bnb-4bit")
         s1 = summarize_news.ensure_article_summaries(model, tokenizer, store, limit=limit)
         s2 = summarize_news.build_world_brief(model, tokenizer, store, top_n=top_n)
+        _data_cache["data"] = None
         return {"summaries": s1, "brief": s2}
 
     @app.get("/api/stats")
