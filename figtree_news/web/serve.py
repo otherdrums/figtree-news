@@ -92,6 +92,9 @@ def _build(store: FigmentStore, *, force: bool = False) -> dict[str, Any]:
 
 async def _broadcast(msg: dict[str, Any]):
     """Broadcast message to all connected WebSocket clients."""
+    # Strip non-JSON fields from crawl_status messages
+    if msg.get("type") == "crawl_status" and "data" in msg:
+        msg["data"] = {k: v for k, v in msg["data"].items() if k != "task"}
     dead = []
     for ws in _ws_connections:
         try:
@@ -361,7 +364,9 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
             _run_crawl_task(db, sources, feeds, seeds, max_articles, compute_kv, summarize, model_id)
         )
         _crawl_state["task"] = task
-        return {"started": True, "state": _crawl_state}
+        # Strip non-JSON fields before returning state
+        return_state = {k: v for k, v in _crawl_state.items() if k != "task"}
+        return {"started": True, "state": return_state}
 
     @app.post("/api/crawl/stop")
     def crawl_stop():
