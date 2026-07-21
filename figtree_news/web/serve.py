@@ -193,7 +193,7 @@ async def _run_crawl_tick(
         budget = max_articles
 
         for i, (sid, uri) in enumerate(feeds.items()):
-            if budget <= 0:
+            if budget <= 0 or _crawl_state.get("stop_requested"):
                 break
             _crawl_state["current_step"] = f"crawling_feed:{sid}"
             _crawl_state["progress"] = i
@@ -219,6 +219,9 @@ async def _run_crawl_tick(
                     "total_articles": search_idx.article_count(),
                 }})
 
+        if _crawl_state.get("stop_requested"):
+            raise asyncio.CancelledError("Stop requested")
+
         if seeds and budget > 0:
             _crawl_state["current_step"] = "crawling_seeds"
             _crawl_state["message"] = f"Crawling {len(seeds)} seed URLs..."
@@ -227,6 +230,9 @@ async def _run_crawl_tick(
             await _broadcast({"type": "crawl_status", "data": _crawl_state})
             added = await asyncio.to_thread(crawler.crawl_seeds, seeds)
             stats["seeds_added"] += added
+
+        if _crawl_state.get("stop_requested"):
+            raise asyncio.CancelledError("Stop requested")
 
         _crawl_state["current_step"] = "pipeline"
         _crawl_state["message"] = "Running pipeline (trust, lineage, summaries, brief)..."
@@ -256,6 +262,13 @@ async def _run_crawl_tick(
         print(f"[crawl] tick complete — {stats.get('feeds_added',0)} new articles, {n_narr} narratives")
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
+    except asyncio.CancelledError:
+        _crawl_state["running"] = False
+        _crawl_state["continuous"] = False
+        _crawl_state["current_step"] = "idle"
+        _crawl_state["message"] = "Crawl stopped"
+        print("[crawl] stopped by user")
+        await _broadcast({"type": "crawl_status", "data": _crawl_state})
     except Exception as exc:
         _crawl_state["running"] = False
         _crawl_state["current_step"] = "error"
@@ -296,6 +309,8 @@ async def _run_continuous_crawl(
                 db, sources_path, feeds, seeds, max_articles, summarize, compute_kv, model_id,
                 max_stories=max_stories, since=since, before=before,
             )
+        except asyncio.CancelledError:
+            break
         except Exception as exc:
             _crawl_state["message"] = f"Tick failed: {exc}; retrying in {interval}s"
             await _broadcast({"type": "crawl_status", "data": _crawl_state})
@@ -319,6 +334,8 @@ async def _run_continuous_crawl(
             _crawl_state["message"] = "Starting next tick immediately..."
             _crawl_state["running"] = False
             await _broadcast({"type": "crawl_status", "data": _crawl_state})
+            # Yield control so the event loop can process cancellation
+            await asyncio.sleep(0)
 
     _crawl_state["continuous"] = False
     _crawl_state["running"] = False
@@ -527,15 +544,17 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         return {"started": True, "continuous": continuous, "state": return_state}
 
     @app.post("/api/crawl/stop")
-    def crawl_stop():
+    async def crawl_stop():
         global _crawl_state
         _crawl_state["stop_requested"] = True
-        if _crawl_state["task"] and not _crawl_state["task"].done():
+        _crawl_state["running"] = False
+        _crawl_state["continuous"] = False
+        _crawl_state["current_step"] = "stopping"
+        _crawl_state["message"] = "Stopping..."
+        await _broadcast({"type": "crawl_status", "data": _crawl_state})
+        if _crawl_state.get("task") and not _crawl_state["task"].done():
             _crawl_state["task"].cancel()
-            _crawl_state["running"] = False
-            _crawl_state["message"] = "Stopping..."
-            return {"stopped": True}
-        return {"error": "No running crawl"}
+        return {"stopped": True}
 
     @app.post("/api/pipeline/run")
     async def pipeline_run(request: Request):
