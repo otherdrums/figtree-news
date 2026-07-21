@@ -47,6 +47,7 @@ TEMPLATES_DIR = os.path.join(_HERE, "templates")
 STATIC_DIR = os.path.join(_HERE, "static")
 
 _gen_cache: dict[str, Any] = {}
+_model_cache: dict[str, Any] = {}
 _data_cache: dict[str, Any] = {"data": None, "ts": 0.0}
 _crawl_state: dict[str, Any] = {
     "running": False,
@@ -162,10 +163,16 @@ async def _run_crawl_tick(
     await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
     try:
-        # Run model loading in a thread so the event loop stays responsive
-        model, tokenizer = await asyncio.to_thread(load_model, model_id)
-        _gen_cache["gen"] = FigmentGenerator(model, tokenizer)
-        print(f"[crawl] model loaded ({model_id.rsplit('/',1)[-1]})")
+        # Load model once and reuse across ticks to avoid GPU OOM
+        cache_key = model_id
+        if cache_key in _model_cache:
+            model, tokenizer = _model_cache[cache_key]
+            print(f"[crawl] model reused ({model_id.rsplit('/',1)[-1]})")
+        else:
+            model, tokenizer = await asyncio.to_thread(load_model, model_id)
+            _model_cache[cache_key] = (model, tokenizer)
+            _gen_cache["gen"] = FigmentGenerator(model, tokenizer)
+            print(f"[crawl] model loaded ({model_id.rsplit('/',1)[-1]})")
 
         store: FigmentStore = connect(db)
         registry = SourceRegistry.load(sources_path)
@@ -567,7 +574,12 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         do_brief = body.get("brief", True)
         max_stories = body.get("max_stories", 0)
         try:
-            model, tokenizer = await asyncio.to_thread(load_model, "unsloth/Qwen3-4B-bnb-4bit")
+            mid = "unsloth/Qwen3-4B-bnb-4bit"
+            if mid in _model_cache:
+                model, tokenizer = _model_cache[mid]
+            else:
+                model, tokenizer = await asyncio.to_thread(load_model, mid)
+                _model_cache[mid] = (model, tokenizer)
             stats = await asyncio.to_thread(
                 run_pipeline, model, tokenizer, store,
                 do_summaries=do_summaries, do_brief=do_brief, max_stories=max_stories,
@@ -588,7 +600,12 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         limit = body.get("limit", 500)
         top_n = body.get("top_n", 8)
         try:
-            model, tokenizer = await asyncio.to_thread(load_model, "unsloth/Qwen3-4B-bnb-4bit")
+            mid = "unsloth/Qwen3-4B-bnb-4bit"
+            if mid in _model_cache:
+                model, tokenizer = _model_cache[mid]
+            else:
+                model, tokenizer = await asyncio.to_thread(load_model, mid)
+                _model_cache[mid] = (model, tokenizer)
             s1 = await asyncio.to_thread(
                 summarize_news.ensure_article_summaries, model, tokenizer, store, limit
             )
