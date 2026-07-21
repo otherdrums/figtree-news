@@ -220,6 +220,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
                 "brief": d["brief"],
                 "narratives": d["narratives"],
                 "agenda": d["agenda"],
+                "by_id": d["by_id"],
                 "articles": sorted(
                     d["articles"],
                     key=lambda f: f.meta.get("first_seen", ""),

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}figtree-news{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
   <header class="header">
@@ -26,6 +27,32 @@
     {% block content %}{% endblock %}
   </main>
 
+  <!-- Floating settings button -->
+  <button id="settings-btn" class="fab fab-settings" onclick="openControlPanel()" title="Crawler Settings & Control">
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+  </button>
+
+  <!-- Control Panel Modal -->
+  <div id="control-modal" class="modal" style="display:none;">
+    <div class="modal-overlay" onclick="closeControlPanel()"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Crawler Control</h2>
+        <button class="btn btn-sm btn-danger" onclick="closeControlPanel()">&times;</button>
+      </div>
+      <div class="modal-body">
+        {% block control_panel %}{% endblock %}
+      </div>
+    </div>
+  </div>
+
+  <!-- New Articles Banner -->
+  <div id="new-articles-banner" class="new-banner" style="display:none;">
+    <span>New articles available</span>
+    <button class="btn btn-sm btn-primary" onclick="location.reload()">Refresh</button>
+    <button class="btn btn-sm" onclick="this.parentElement.style.display='none'">Dismiss</button>
+  </div>
+
   <footer class="footer">
     <div class="container">
       <div class="footer-links">
@@ -38,5 +65,40 @@
       <p>Source-aware newspaper &middot; built on <a href="https://github.com/otherdrums/figtree">figtree</a> figments.</p>
     </div>
   </footer>
+
+  <script>
+    function openControlPanel() {
+      document.getElementById('control-modal').style.display = 'block';
+      document.body.style.overflow = 'hidden';
+    }
+    function closeControlPanel() {
+      document.getElementById('control-modal').style.display = 'none';
+      document.body.style.overflow = '';
+    }
+    // Close modal on Escape key
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') closeControlPanel();
+    });
+  </script>
+
+  <!-- Auto-refresh check -->
+  <script>
+    let lastArticleCount = 0;
+    async function checkForUpdates() {
+      try {
+        const resp = await fetch('/api/stats');
+        const stats = await resp.json();
+        if (lastArticleCount && stats.articles > lastArticleCount) {
+          document.getElementById('new-articles-banner').style.display = 'flex';
+        }
+        lastArticleCount = stats.articles;
+      } catch (e) {}
+    }
+    // Check every 30 seconds
+    checkForUpdates();
+    setInterval(checkForUpdates, 30000);
+  </script>
+
+  {% block extra_js %}{% endblock %}
 </body>
 </html>

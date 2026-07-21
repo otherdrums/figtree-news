@@ -2,40 +2,71 @@
 {% block title %}Front page &middot; figtree-news{% endblock %}
 {% block content %}
 <div class="container">
-  <section class="brief">
-    <h2>World brief</h2>
-    {% if brief %}
-      <p>{{ brief }}</p>
-    {% else %}
-      <p class="muted">No brief generated yet. Run the crawler with summarization.</p>
-    {% endif %}
-  </section>
 
-  <section>
-    <h2>Top stories</h2>
+  <!-- World Brief -->
+  {% if brief %}
+  <section class="brief featured">
+    <span class="kicker">World Brief</span>
+    <h1>{{ brief }}</h1>
+  </section>
+  {% endif %}
+
+  <!-- Narratives: Newspaper Story Comparison Cards -->
+  <section class="stories-section">
+    <h2 class="section-title">
+      <span class="section-kicker">Top Stories</span>
+      Comparing how outlets cover the same events
+    </h2>
+
     {% if narratives %}
-      <ul class="stories">
-        {% for n in narratives %}
-          <li>
+    <div class="narrative-grid">
+      {% for n in narratives %}
+      <article class="narrative-card">
+        <div class="narrative-header">
+          <h3 class="narrative-title">
             <a href="/narrative/{{ n.narrative_id }}">
-              {{ n.entities[:6] | join(", ") or n.text[:80] }}
+              {{ n.entities[:5] | join(", ") or n.text[:80] }}
             </a>
-            <span class="meta">
-              {{ n.sources | length }} sources &middot;
-              first by
-              <a href="/source/{{ n.first_reporter }}">{{ n.first_reporter }}</a>
-              {% if n.first_reporter_url %}(<a href="{{ n.first_reporter_url }}">link</a>){% endif %}
+          </h3>
+          <div class="narrative-meta">
+            <span class="source-count">{{ n.sources | length }} sources</span>
+            <span class="first-reporter">
+              First: <a href="/source/{{ n.first_reporter }}">{{ n.first_reporter }}</a>
             </span>
-          </li>
-        {% endfor %}
-      </ul>
+          </div>
+        </div>
+
+        <div class="source-versions">
+          {% for member_id in n.members %}
+            {% set article = by_id.get(member_id) %}
+            {% if article %}
+            <div class="source-version" data-source="{{ article.meta.get('source_id', '') }}">
+              <div class="version-header">
+                <a href="/source/{{ article.meta.get('source_id') }}" class="source-badge">{{ article.meta.get('source_id') }}</a>
+                {% if article.meta.get('published') %}
+                <time class="published-date" datetime="{{ article.meta.get('published') }}">{{ article.meta.get('published')[:16] if article.meta.get('published') else '' }}</time>
+                {% endif %}
+              </div>
+              <h4 class="version-headline">
+                <a href="/article/{{ article.figment_id }}">{{ article.meta.get('title') or article.text[:100] }}</a>
+              </h4>
+              <p class="version-lead">{{ article.meta.get('summary') or article.text[:180] }}{% if article.text | length > 180 %}...{% endif %}</p>
+              <a href="/article/{{ article.figment_id }}" class="read-more">Read full article &rarr;</a>
+            </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </article>
+      {% endfor %}
+    </div>
     {% else %}
-      <p class="muted">No stories clustered yet. Ingest more articles.</p>
+    <p class="muted">No cross-source stories yet. Run the crawler to ingest articles.</p>
     {% endif %}
   </section>
 
+  <!-- Source Trust Board -->
   <section>
-    <h2>Source trust board</h2>
+    <h2 class="section-title">Source Trust Board</h2>
     <div class="overflow-table">
       <table class="board">
         <tr><th>Source</th><th>Trust</th><th>Led</th><th>Echoed</th><th>Contradicts</th></tr>
@@ -52,82 +83,82 @@
     </div>
   </section>
 
+  <!-- Latest Articles Feed -->
   <section>
-    <h2>Latest articles</h2>
-    <ul class="articles">
+    <h2 class="section-title">Latest Articles</h2>
+    <div class="articles-feed">
       {% for a in articles %}
-        <li>
-          <a href="/article/{{ a.figment_id }}">{{ a.meta.get("title") or a.text[:80] }}</a>
-          <span class="meta">
-            <a href="/source/{{ a.meta.get('source_id') }}">{{ a.meta.get("source_id") }}</a>
-            {% if a.meta.get("url") %}&middot; <a href="{{ a.meta.get('url') }}">source</a>{% endif %}
-          </span>
-        </li>
+      <article class="feed-item">
+        <div class="feed-meta">
+          <a href="/source/{{ a.meta.get('source_id') }}" class="source-badge">{{ a.meta.get('source_id') }}</a>
+          {% if a.meta.get('published') %}
+          <time>{{ a.meta.get('published')[:16] }}</time>
+          {% endif %}
+        </div>
+        <h4><a href="/article/{{ a.figment_id }}">{{ a.meta.get('title') or a.text[:80] }}</a></h4>
+        <p class="feed-lead">{{ a.meta.get('summary') or a.text[:160] }}...</p>
+      </article>
       {% endfor %}
-    </ul>
-  </section>
-
-  <!-- Control Panel -->
-  <section id="control-panel">
-    <h2>Crawler Control</h2>
-    <div class="control-grid">
-      <div class="control-card">
-        <h3>Crawl Settings</h3>
-        <div class="form-group">
-          <label for="max-articles">Max articles per run</label>
-          <input type="number" id="max-articles" value="40" min="1" max="200">
-        </div>
-        <div class="form-group">
-          <label>
-            <input type="checkbox" id="compute-kv"> Compute KV cache (slower, enables instant recall)
-          </label>
-        </div>
-        <div class="form-group">
-          <label>
-            <input type="checkbox" id="summarize" checked> Generate summaries & brief
-          </label>
-        </div>
-        <div class="form-group">
-          <label for="model-id">Model</label>
-          <input type="text" id="model-id" value="unsloth/Qwen3-4B-bnb-4bit" readonly>
-        </div>
-        <div class="form-group">
-          <label for="interval">Continuous interval (seconds)</label>
-          <input type="number" id="interval" value="3600" min="60">
-        </div>
-      </div>
-
-      <div class="control-card">
-        <h3>Feeds & Seeds</h3>
-        <div id="feeds-list" class="feed-list"></div>
-        <button class="btn btn-secondary" onclick="addFeedRow()">+ Add Feed</button>
-        <div id="seeds-list" class="feed-list"></div>
-        <button class="btn btn-secondary" onclick="addSeedRow()">+ Add Seed URL</button>
-      </div>
-
-      <div class="control-card">
-        <h3>Actions</h3>
-        <button class="btn btn-primary" id="btn-crawl-once" onclick="runCrawl(false)">Run Once</button>
-        <button class="btn btn-primary" id="btn-crawl-continuous" onclick="runCrawl(true)">Start Continuous</button>
-        <button class="btn btn-danger" id="btn-crawl-stop" onclick="stopCrawl()" disabled>Stop</button>
-        <button class="btn btn-secondary" onclick="runPipeline()">Run Pipeline Only</button>
-        <button class="btn btn-secondary" onclick="regenerateSummaries()">Regenerate Summaries</button>
-      </div>
     </div>
-
-    <div class="progress-panel" id="progress-panel" style="display:none;">
-      <h3>Live Progress</h3>
-      <div class="progress-bar-container">
-        <div class="progress-bar" id="progress-bar"></div>
-      </div>
-      <div class="progress-info">
-        <span id="progress-step">Idle</span>
-        <span id="progress-message"></span>
-        <span id="progress-stats"></span>
-      </div>
-      <div class="progress-log" id="progress-log"></div>
-    </div>
+    {% if articles | length >= 30 %}
+    <p class="muted archive-link"><a href="/api/articles">View all articles &rarr;</a></p>
+    {% endif %}
   </section>
+</div>
+{% endblock %}
+
+{% block control_panel %}
+<div class="control-grid">
+  <div class="control-card">
+    <h3>Crawl Settings</h3>
+    <div class="form-group">
+      <label for="max-articles">Max articles per run</label>
+      <input type="number" id="max-articles" value="40" min="1" max="200">
+    </div>
+    <div class="form-group">
+      <label>
+        <input type="checkbox" id="compute-kv"> Compute KV cache
+      </label>
+    </div>
+    <div class="form-group">
+      <label>
+        <input type="checkbox" id="summarize" checked> Generate summaries & brief
+      </label>
+    </div>
+    <div class="form-group">
+      <label for="interval">Interval (seconds)</label>
+      <input type="number" id="interval" value="3600" min="60">
+    </div>
+  </div>
+
+  <div class="control-card">
+    <h3>Feeds & Seeds</h3>
+    <div id="feeds-list" class="feed-list"></div>
+    <button class="btn btn-sm btn-secondary" onclick="addFeedRow()">+ Add Feed</button>
+    <div id="seeds-list" class="feed-list"></div>
+    <button class="btn btn-sm btn-secondary" onclick="addSeedRow()">+ Add Seed</button>
+  </div>
+
+  <div class="control-card">
+    <h3>Actions</h3>
+    <button class="btn btn-primary" id="btn-crawl-once" onclick="runCrawl(false)">Run Once</button>
+    <button class="btn btn-primary" id="btn-crawl-continuous" onclick="runCrawl(true)">Start Continuous</button>
+    <button class="btn btn-danger" id="btn-crawl-stop" onclick="stopCrawl()" disabled>Stop</button>
+    <button class="btn btn-secondary" onclick="runPipeline()">Run Pipeline Only</button>
+    <button class="btn btn-secondary" onclick="regenerateSummaries()">Regenerate Summaries</button>
+  </div>
+</div>
+
+<div class="progress-panel" id="progress-panel" style="display:none; margin-top:1rem;">
+  <h3>Live Progress</h3>
+  <div class="progress-bar-container">
+    <div class="progress-bar" id="progress-bar"></div>
+  </div>
+  <div class="progress-info">
+    <span id="progress-step">Idle</span>
+    <span id="progress-message"></span>
+  </div>
+  <div class="progress-log" id="progress-log"></div>
 </div>
 
 <script>
@@ -139,9 +170,7 @@ function connectWS() {
   ws = new WebSocket(WS_URL);
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
-    if (msg.type === 'crawl_status') {
-      updateCrawlUI(msg.data);
-    }
+    if (msg.type === 'crawl_status') updateCrawlUI(msg.data);
   };
   ws.onclose = () => setTimeout(connectWS, 2000);
   ws.onerror = () => ws.close();
@@ -154,27 +183,17 @@ function updateCrawlUI(state) {
   document.getElementById('btn-crawl-continuous').disabled = crawlRunning;
   document.getElementById('btn-crawl-stop').disabled = !crawlRunning;
 
-  if (state.running || state.current_step !== 'idle') {
-    document.getElementById('progress-panel').style.display = 'block';
-  }
+  const showPanel = state.running || state.current_step !== 'idle';
+  document.getElementById('progress-panel').style.display = showPanel ? 'block' : 'none';
 
-  const stepEl = document.getElementById('progress-step');
-  const msgEl = document.getElementById('progress-message');
-  const statsEl = document.getElementById('progress-stats');
-  const barEl = document.getElementById('progress-bar');
-  const logEl = document.getElementById('progress-log');
-
-  stepEl.textContent = state.current_step;
-  msgEl.textContent = state.message;
-  
+  document.getElementById('progress-step').textContent = state.current_step;
+  document.getElementById('progress-message').textContent = state.message;
   if (state.total > 0) {
     const pct = Math.round((state.progress / state.total) * 100);
-    barEl.style.width = `${pct}%`;
-    statsEl.textContent = `${state.progress}/${state.total} (${pct}%)`;
+    document.getElementById('progress-bar').style.width = pct + '%';
   }
-
   if (state.stats && Object.keys(state.stats).length) {
-    logEl.innerHTML = '<strong>Last run stats:</strong> ' + JSON.stringify(state.stats, null, 2);
+    document.getElementById('progress-log').innerHTML = JSON.stringify(state.stats, null, 2);
   }
 }
 
@@ -190,115 +209,60 @@ async function runCrawl(continuous) {
     const u = row.querySelector('.seed-url').value.trim();
     if (u) seeds.push(u);
   });
-
   const body = {
-    feeds,
-    seeds,
+    feeds, seeds,
     max_articles: parseInt(document.getElementById('max-articles').value),
     compute_kv: document.getElementById('compute-kv').checked,
     summarize: document.getElementById('summarize').checked,
-    model_id: document.getElementById('model-id').value,
   };
-
   try {
     const resp = await fetch('/api/crawl/run', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
     });
     const data = await resp.json();
-    console.log('Crawl started', data);
-  } catch (e) {
-    console.error('Crawl error', e);
-    alert('Failed to start crawl: ' + e.message);
-  }
+    if (data.error) alert(data.error);
+  } catch (e) { alert('Failed: ' + e.message); }
 }
 
 async function stopCrawl() {
-  try {
-    await fetch('/api/crawl/stop', {method: 'POST'});
-  } catch (e) {
-    console.error('Stop error', e);
-  }
+  try { await fetch('/api/crawl/stop', {method: 'POST'}); } catch (e) {}
 }
 
 async function runPipeline() {
   try {
     const resp = await fetch('/api/pipeline/run', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({summarize: true, brief: true}),
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({summarize: true, brief: true})
     });
     const data = await resp.json();
-    alert('Pipeline done: ' + JSON.stringify(data));
+    alert('Pipeline: ' + JSON.stringify(data));
     location.reload();
-  } catch (e) {
-    console.error('Pipeline error', e);
-    alert('Pipeline failed: ' + e.message);
-  }
+  } catch (e) { alert('Failed: ' + e.message); }
 }
 
 async function regenerateSummaries() {
   try {
     const resp = await fetch('/api/summaries/regenerate', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({limit: 500, top_n: 8}),
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({limit: 500, top_n: 8})
     });
     const data = await resp.json();
-    alert('Summaries regenerated: ' + JSON.stringify(data));
+    alert('Summaries: ' + JSON.stringify(data));
     location.reload();
-  } catch (e) {
-    console.error('Summaries error', e);
-    alert('Failed: ' + e.message);
-  }
+  } catch (e) { alert('Failed: ' + e.message); }
 }
 
-// Load feeds/seeds from sources.json on page load
-async function loadConfig() {
-  try {
-    const resp = await fetch('/api/sources');
-    const data = await resp.json();
-    // We need feeds/seeds from the original config, not the agenda
-    // Fallback: try to fetch from a config endpoint or use defaults
-    // For now, populate from the page data if available
-  } catch (e) {
-    console.warn('Could not load feeds config');
-  }
-}
-
-// Feed/Seed row management
 function addFeedRow(source = '', url = '') {
-  const div = document.createElement('div');
-  div.className = 'feed-row';
-  div.innerHTML = `
-    <input type="text" class="feed-source" placeholder="Source ID (e.g., bbc)" value="${source}">
-    <input type="url" class="feed-url" placeholder="Feed URL" value="${url}">
-    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">×</button>
-  `;
+  const div = document.createElement('div'); div.className = 'feed-row';
+  div.innerHTML = `<input type="text" class="feed-source" placeholder="source" value="${source}"><input type="url" class="feed-url" placeholder="Feed URL" value="${url}"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button>`;
   document.getElementById('feeds-list').appendChild(div);
 }
-
 function addSeedRow(url = '') {
-  const div = document.createElement('div');
-  div.className = 'seed-row';
-  div.innerHTML = `
-    <input type="url" class="seed-url" placeholder="Seed URL" value="${url}" style="flex:1;">
-    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">×</button>
-  `;
+  const div = document.createElement('div'); div.className = 'seed-row';
+  div.innerHTML = `<input type="url" class="seed-url" placeholder="Seed URL" value="${url}"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button>`;
   document.getElementById('seeds-list').appendChild(div);
 }
 
-// Load default feeds from sources.json
-fetch('/api/sources')
-  .then(r => r.json())
-  .then(data => {
-    // The agenda doesn't have feeds/seeds, so use known defaults
-    // In production, add a /api/config endpoint
-  })
-  .catch(() => {});
-
-// Add default feed rows
 const DEFAULT_FEEDS = {
   'bbc': 'http://feeds.bbci.co.uk/news/rss.xml',
   'aljazeera': 'https://www.aljazeera.com/xml/rss/all.xml',
@@ -307,40 +271,30 @@ const DEFAULT_FEEDS = {
 };
 Object.entries(DEFAULT_FEEDS).forEach(([s, u]) => addFeedRow(s, u));
 
-// Style additions for control panel
-const style = document.createElement('style');
-style.textContent = `
-  .control-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin-top: 1rem; }
-  .control-card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 0.5rem; padding: 1.5rem; }
-  .control-card h3 { margin-top: 0; color: var(--accent-green); font-size: 1.2rem; margin-bottom: 1rem; }
-  .form-group { margin-bottom: 1rem; }
-  .form-group label { display: block; margin-bottom: 0.5rem; color: var(--gray-text); }
-  .form-group input[type="text"], .form-group input[type="number"], .form-group input[type="url"] {
-    width: 100%; padding: 0.5rem; background: var(--light-bg); border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 4px; color: var(--dark-text); font-family: inherit;
+fetch('/api/config').then(r => r.json()).then(cfg => {
+  if (cfg.feeds && Object.keys(cfg.feeds).length) {
+    document.getElementById('feeds-list').innerHTML = '';
+    Object.entries(cfg.feeds).forEach(([s, u]) => addFeedRow(s, u));
   }
-  .form-group input[type="checkbox"] { margin-right: 0.5rem; }
-  .feed-row, .seed-row { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center; }
-  .feed-row input, .seed-row input { padding: 0.5rem; background: var(--light-bg); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--dark-text); }
-  .feed-row .feed-source { width: 120px; }
-  .feed-row .feed-url { flex: 1; }
-  .seed-row .seed-url { flex: 1; }
-  .btn { padding: 0.6rem 1.2rem; border-radius: 4px; border: none; cursor: pointer; font-weight: 500; transition: background 0.2s; margin-right: 0.5rem; margin-bottom: 0.5rem; }
-  .btn-primary { background: var(--accent-green); color: var(--light-bg); }
-  .btn-primary:hover { opacity: 0.9; }
-  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-secondary { background: rgba(255,255,255,0.1); color: var(--primary-blue); border: 1px solid rgba(255,255,255,0.2); }
-  .btn-secondary:hover { background: rgba(255,255,255,0.2); }
-  .btn-danger { background: #FF6B6B; color: white; }
-  .btn-danger:hover { opacity: 0.9; }
-  .btn-sm { padding: 0.3rem 0.6rem; font-size: 0.8rem; }
-  .progress-panel { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 0.5rem; padding: 1.5rem; margin-top: 1.5rem; }
-  .progress-panel h3 { margin-top: 0; color: var(--accent-green); }
-  .progress-bar-container { height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; margin-bottom: 0.5rem; }
-  .progress-bar { height: 100%; background: var(--accent-green); width: 0%; transition: width 0.3s; }
-  .progress-info { display: flex; gap: 1rem; flex-wrap: wrap; color: var(--gray-text); font-size: 0.9rem; }
-  .progress-log { margin-top: 1rem; padding: 1rem; background: var(--light-bg); border-radius: 4px; font-family: monospace; font-size: 0.8rem; white-space: pre-wrap; max-height: 200px; overflow: auto; }
-`;
-document.head.appendChild(style);
+  if (cfg.seeds) cfg.seeds.forEach(u => addSeedRow(u));
+}).catch(() => {});
+</script>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // Parse relative dates
+  document.querySelectorAll('time.published-date').forEach(el => {
+    const dt = el.getAttribute('datetime');
+    if (!dt) return;
+    const d = new Date(dt);
+    if (isNaN(d)) return;
+    const now = new Date();
+    const diff = (now - d) / 1000;
+    if (diff < 3600) el.textContent = Math.round(diff/60) + ' min ago';
+    else if (diff < 86400) el.textContent = Math.round(diff/3600) + ' hr ago';
+    else if (diff < 604800) el.textContent = Math.round(diff/86400) + ' days ago';
+    else el.textContent = d.toLocaleDateString();
+  });
 </script>
 {% endblock %}
