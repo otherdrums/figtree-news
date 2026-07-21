@@ -139,18 +139,22 @@ def compute_lineage(store: FigmentStore) -> dict[str, Any]:
                 )
             updated_articles.append(f)
 
+        # Use first reporter's headline as the narrative title; fall back to first sentence.
+        narrative_title = first.meta.get("title") or first.text.split(".")[0].strip()
+        narrative_text = f"Story across {len(sources)} sources ({', '.join(sources)}); " \
+                         f"first reported by {first.meta.get('source_id')}."
         narrative = Figment.create(
-            text=f"Story across {len(sources)} sources ({', '.join(sources)}); "
-                 f"first reported by {first.meta.get('source_id')}.",
+            text=narrative_text,
             boundary=first.boundary.copy(),
             meta={
                 "edge_type": "narrative",
+                "title": narrative_title,
                 "members": members,
                 "sources": sources,
                 "first_reporter": first.figment_id,
                 "first_reporter_source": first.meta.get("source_id"),
                 "first_reporter_url": first.meta.get("url"),
-                "entities": sorted(set().union(*[_entities(f.text) for f in group])),
+                "entities": sorted(set().union(*[_entities(f.text) for f in group]))[:12],
             },
             figment_id=narrative_id,
         )
@@ -185,6 +189,7 @@ def get_narratives(store: FigmentStore, *, all_figs: list | None = None) -> list
             out.append(
                 {
                     "narrative_id": f.figment_id,
+                    "title": f.meta.get("title", ""),
                     "sources": f.meta.get("sources", []),
                     "members": f.meta.get("members", []),
                     "first_reporter": f.meta.get("first_reporter_source"),

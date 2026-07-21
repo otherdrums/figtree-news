@@ -24,7 +24,7 @@
     <ul class="stories">
       {% for n in narratives %}
         <li>
-          <a href="/narrative/{{ n.narrative_id }}">{{ n.entities[:6] | join(", ") or n.text[:80] }}</a>
+          <a href="/narrative/{{ n.narrative_id }}">{{ n.title or n.text[:80] }}</a>
           &mdash; first by <a href="/source/{{ n.first_reporter }}">{{ n.first_reporter }}</a>
         </li>
       {% endfor %}

@@ -3,9 +3,9 @@
 {% block content %}
 <div class="container">
   <section>
-    <h2>Narrative</h2>
+    <h2>{{ narrative.title or narrative.text[:80] }}</h2>
+    <p class="meta">{{ narrative.text }}</p>
     <p class="meta">Entities: {{ narrative.entities | join(", ") }}</p>
-    <p>{{ narrative.text }}</p>
 
     <section>
       <h3>First reporter</h3>

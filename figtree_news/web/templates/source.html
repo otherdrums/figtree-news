@@ -29,7 +29,7 @@
     <ul class="stories">
       {% for n in narratives %}
         <li>
-          <a href="/narrative/{{ n.narrative_id }}">{{ n.entities[:6] | join(", ") or n.text[:80] }}</a>
+          <a href="/narrative/{{ n.narrative_id }}">{{ n.title or n.text[:80] }}</a>
           {% if n.first_reporter == sid %}<span class="tag">led</span>{% endif %}
         </li>
       {% endfor %}

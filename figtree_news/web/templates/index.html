@@ -25,7 +25,7 @@
         <div class="narrative-header">
           <h3 class="narrative-title">
             <a href="/narrative/{{ n.narrative_id }}">
-              {{ n.entities[:5] | join(", ") or n.text[:80] }}
+              {{ n.title or n.text[:80] }}
             </a>
           </h3>
           <div class="narrative-meta">
