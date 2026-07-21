@@ -116,6 +116,7 @@ def crawl_cmd(
     max_pages: int = typer.Option(50, "--max-pages"),
     seen_path: str = typer.Option("./seen_urls.json"),
     max_articles: int = typer.Option(40, "--max-articles", help="Cap articles ingested per run"),
+    backfill: bool = typer.Option(False, "--backfill", help="Deep initial crawl (max_articles=200) for empty stores"),
     model_id: str = typer.Option("unsloth/Qwen3-4B-bnb-4bit"),
     compute_kv: bool = False,
     summarize: bool = True,
@@ -128,6 +129,10 @@ def crawl_cmd(
     """
     if once:
         loop = False
+    if backfill:
+        max_articles = 200
+        loop = False
+        typer.echo("Backfill mode: deep initial crawl with 200 article cap")
     model, tokenizer, store, registry = _load(model_id, db, sources)
     cfg_feeds, cfg_seeds = _crawl_config(sources)
     feeds = {**cfg_feeds, **_parse_feeds(feed)}

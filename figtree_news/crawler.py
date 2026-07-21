@@ -28,6 +28,7 @@ from figtree import FigmentStore
 
 from .config import SourceRegistry
 from .ingest import _read_feed, ingest_articles
+from .search_index import get_index
 
 USER_AGENT = "figtree-news/0.1 (+https://github.com/otherdrums/figtree-news; research crawler)"
 
@@ -175,6 +176,14 @@ class Crawler:
             if url:
                 self._mark(url)
             return False
+
+        # Title-based dedup: skip if near-duplicate title from same source exists
+        title = article.get("title") or ""
+        if title and get_index().title_exists(title, source_id):
+            if url:
+                self._mark(url)
+            return False
+
         ingest_articles(
             self.model,
             self.tokenizer,
