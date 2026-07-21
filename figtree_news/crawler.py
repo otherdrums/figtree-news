@@ -76,6 +76,7 @@ class Crawler:
         max_pages: int = 50,
         compute_kv: bool = False,
         summarize_images: bool = False,
+        kv_manager=None,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -86,6 +87,7 @@ class Crawler:
         self.max_pages = max_pages
         self.compute_kv = compute_kv
         self.summarize_images = summarize_images
+        self.kv_manager = kv_manager
         self.seen: set[str] = self._load_seen()
 
     # -- URL de-duplication ------------------------------------------------ #
@@ -178,6 +180,7 @@ class Crawler:
             [article],
             compute_kv=self.compute_kv,
             summarize_images=self.summarize_images,
+            kv_manager=self.kv_manager,
         )
         if url:
             self._mark(url)

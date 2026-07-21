@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from figtree import FigmentStore, connect, load_model, FigmentGenerator
+from figtree.kv_cache_manager import KVCacheManager
 
 from .. import summarize_news
 from ..config import SourceRegistry
@@ -137,6 +138,7 @@ async def _run_crawl_tick(
     seeds: list[str],
     max_articles: int,
     summarize: bool,
+    compute_kv: bool,
     model_id: str,
 ):
     """Single crawl tick. Heavy (model) work runs in threads so the event loop stays free."""
@@ -157,10 +159,15 @@ async def _run_crawl_tick(
         store: FigmentStore = connect(db)
         registry = SourceRegistry.load(sources_path)
 
+        kv_manager = None
+        if compute_kv:
+            kv_manager = KVCacheManager(model, tokenizer, kv_root="./figtree_kv", mode="eager")
+
         crawler = Crawler(
             model, tokenizer, store, registry,
             seen_path="./seen_urls.json",
-            compute_kv=False, summarize_images=summarize,
+            compute_kv=compute_kv, summarize_images=summarize,
+            kv_manager=kv_manager,
         )
 
         _crawl_state["current_step"] = "crawling_feeds"
@@ -237,6 +244,7 @@ async def _run_continuous_crawl(
     seeds: list[str],
     max_articles: int,
     summarize: bool,
+    compute_kv: bool,
     model_id: str,
     interval: int,
 ):
@@ -250,7 +258,7 @@ async def _run_continuous_crawl(
             break
         try:
             await _run_crawl_tick(
-                db, sources_path, feeds, seeds, max_articles, summarize, model_id
+                db, sources_path, feeds, seeds, max_articles, summarize, compute_kv, model_id
             )
         except Exception as exc:
             _crawl_state["message"] = f"Tick failed: {exc}; retrying in {interval}s"
@@ -449,13 +457,13 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         if continuous:
             task = asyncio.create_task(
                 _run_continuous_crawl(
-                    db, sources, feeds, seeds, max_articles, summarize, model_id, interval
+                    db, sources, feeds, seeds, max_articles, summarize, compute_kv, model_id, interval
                 )
             )
         else:
             task = asyncio.create_task(
                 _run_crawl_tick(
-                    db, sources, feeds, seeds, max_articles, summarize, model_id
+                    db, sources, feeds, seeds, max_articles, summarize, compute_kv, model_id
                 )
             )
         _crawl_state["task"] = task
