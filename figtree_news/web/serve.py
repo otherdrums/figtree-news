@@ -326,7 +326,11 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         if _crawl_state["running"]:
             return {"error": "Crawl already running", "state": _crawl_state}
 
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception as e:
+            return {"error": f"Bad JSON body: {e}"}
+
         feeds = body.get("feeds", {})
         seeds = body.get("seeds", [])
         max_articles = body.get("max_articles", 40)
@@ -336,7 +340,22 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
 
         # Load feeds/seeds from sources.json if not provided
         if not feeds and not seeds:
-            feeds, seeds = registry.feeds, registry.seeds
+            try:
+                feeds = getattr(registry, "feeds", {})
+                seeds = getattr(registry, "seeds", [])
+            except Exception:
+                # fallback: read raw JSON
+                try:
+                    import json as _json
+                    with open(sources, "r", encoding="utf-8") as fh:
+                        raw = _json.load(fh)
+                    feeds = raw.get("feeds", {})
+                    seeds = raw.get("seeds", [])
+                except Exception:
+                    return {"error": "No feeds configured and could not read sources.json"}
+
+        if not feeds and not seeds:
+            return {"error": "No feeds or seeds configured"}
 
         task = asyncio.create_task(
             _run_crawl_task(db, sources, feeds, seeds, max_articles, compute_kv, summarize, model_id)
@@ -357,25 +376,37 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     @app.post("/api/pipeline/run")
     async def pipeline_run(request: Request):
         """Run just the pipeline (trust, lineage, summaries, brief)."""
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception as e:
+            return {"error": f"Bad JSON: {e}"}
         do_summaries = body.get("summarize", True)
         do_brief = body.get("brief", True)
-        model, tokenizer = load_model("unsloth/Qwen3-4B-bnb-4bit")
-        stats = run_pipeline(model, tokenizer, store, do_summaries=do_summaries, do_brief=do_brief)
-        _data_cache["data"] = None
-        return stats
+        try:
+            model, tokenizer = load_model("unsloth/Qwen3-4B-bnb-4bit")
+            stats = run_pipeline(model, tokenizer, store, do_summaries=do_summaries, do_brief=do_brief)
+            _data_cache["data"] = None
+            return stats
+        except Exception as e:
+            return {"error": str(e)}
 
     @app.post("/api/summaries/regenerate")
     async def summaries_regenerate(request: Request):
         """Regenerate article summaries and world brief."""
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception as e:
+            return {"error": f"Bad JSON: {e}"}
         limit = body.get("limit", 500)
         top_n = body.get("top_n", 8)
-        model, tokenizer = load_model("unsloth/Qwen3-4B-bnb-4bit")
-        s1 = summarize_news.ensure_article_summaries(model, tokenizer, store, limit=limit)
-        s2 = summarize_news.build_world_brief(model, tokenizer, store, top_n=top_n)
-        _data_cache["data"] = None
-        return {"summaries": s1, "brief": s2}
+        try:
+            model, tokenizer = load_model("unsloth/Qwen3-4B-bnb-4bit")
+            s1 = summarize_news.ensure_article_summaries(model, tokenizer, store, limit=limit)
+            s2 = summarize_news.build_world_brief(model, tokenizer, store, top_n=top_n)
+            _data_cache["data"] = None
+            return {"summaries": s1, "brief": s2}
+        except Exception as e:
+            return {"error": str(e)}
 
     @app.get("/api/stats")
     def api_stats():
