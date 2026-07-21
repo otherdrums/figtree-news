@@ -448,6 +448,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         feeds = body.get("feeds", {})
         seeds = body.get("seeds", [])
         max_articles = body.get("max_articles", 40)
+        compute_kv = body.get("compute_kv", False)
         summarize = body.get("summarize", True)
         model_id = body.get("model_id", "unsloth/Qwen3-4B-bnb-4bit")
         continuous = body.get("continuous", False)
