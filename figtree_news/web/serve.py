@@ -63,8 +63,7 @@ def _get_generator():
 
 
 def _build(store: FigmentStore, *, force: bool = False) -> dict[str, Any]:
-    now = time.time()
-    if not force and _data_cache["data"] and (now - _data_cache["ts"] < 30):
+    if not force and _data_cache["data"] is not None:
         return _data_cache["data"]
     all_figs = store.all()
     by_id = {f.figment_id: f for f in all_figs}
@@ -86,8 +85,16 @@ def _build(store: FigmentStore, *, force: bool = False) -> dict[str, Any]:
         "brief": brief,
     }
     _data_cache["data"] = result
-    _data_cache["ts"] = now
+    _data_cache["ts"] = time.time()
     return result
+
+
+def _warm_cache(store: FigmentStore):
+    """Pre-load the data cache at startup so first request is instant."""
+    try:
+        _build(store, force=True)
+    except Exception as exc:
+        print(f"[warm_cache] failed: {exc}")
 
 
 async def _broadcast(msg: dict[str, Any]):
@@ -190,6 +197,7 @@ async def _run_crawl_task(
     _crawl_state["current_step"] = "done"
     _crawl_state["message"] = f"Done: {stats.get('feeds_added',0)} new articles, {stats.get('narratives',0)} narratives"
     _data_cache["data"] = None
+    _warm_cache(store)
     await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
 
@@ -391,6 +399,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
             model, tokenizer = load_model("unsloth/Qwen3-4B-bnb-4bit")
             stats = run_pipeline(model, tokenizer, store, do_summaries=do_summaries, do_brief=do_brief)
             _data_cache["data"] = None
+            _warm_cache(store)
             return stats
         except Exception as e:
             return {"error": str(e)}
@@ -409,6 +418,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
             s1 = summarize_news.ensure_article_summaries(model, tokenizer, store, limit=limit)
             s2 = summarize_news.build_world_brief(model, tokenizer, store, top_n=top_n)
             _data_cache["data"] = None
+            _warm_cache(store)
             return {"summaries": s1, "brief": s2}
         except Exception as e:
             return {"error": str(e)}
@@ -444,4 +454,5 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         except WebSocketDisconnect:
             _ws_connections.remove(websocket)
 
+    _warm_cache(store)
     return app
