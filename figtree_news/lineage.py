@@ -159,8 +159,7 @@ def compute_lineage(store: FigmentStore) -> dict[str, Any]:
 
         # Use first reporter's headline as the narrative title; fall back to first sentence.
         narrative_title = first.meta.get("title") or first.text.split(".")[0].strip()
-        narrative_text = f"Story across {len(sources)} sources ({', '.join(sources)}); " \
-                         f"first reported by {first.meta.get('source_id')}."
+        narrative_text = narrative_title
         narrative = Figment.create(
             text=narrative_text,
             boundary=first.boundary.copy(),

@@ -13,7 +13,6 @@ import asyncio
 import json
 import os
 import time
-from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -39,6 +38,8 @@ _data_cache: dict[str, Any] = {"data": None, "ts": 0.0}
 _crawl_state: dict[str, Any] = {
     "running": False,
     "task": None,
+    "continuous": False,
+    "stop_requested": False,
     "current_step": "idle",
     "progress": 0,
     "total": 0,
@@ -97,6 +98,18 @@ def _warm_cache(store: FigmentStore):
         print(f"[warm_cache] failed: {exc}")
 
 
+def _get_stats(store: FigmentStore) -> dict[str, Any]:
+    d = _build(store)
+    return {
+        "articles": len(d["articles"]),
+        "narratives": len(d["narratives"]),
+        "derivatives": len(d["derivatives"]),
+        "sources": len(d["agenda"]),
+        "has_brief": bool(d["brief"]),
+        "last_updated": max((a.meta.get("first_seen", "") for a in d["articles"]), default=""),
+    }
+
+
 async def _broadcast(msg: dict[str, Any]):
     """Broadcast message to all connected WebSocket clients."""
     # Strip non-JSON fields from crawl_status messages
@@ -112,17 +125,16 @@ async def _broadcast(msg: dict[str, Any]):
         _ws_connections.remove(ws)
 
 
-async def _run_crawl_task(
+async def _run_crawl_tick(
     db: str,
     sources_path: str,
     feeds: dict[str, str],
     seeds: list[str],
     max_articles: int,
-    compute_kv: bool,
     summarize: bool,
     model_id: str,
 ):
-    """Background task that runs a single crawl tick + pipeline."""
+    """Single crawl tick. Heavy (model) work runs in threads so the event loop stays free."""
     global _crawl_state
     _crawl_state["running"] = True
     _crawl_state["start_time"] = time.time()
@@ -133,13 +145,13 @@ async def _run_crawl_task(
     await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
     try:
-        model, tokenizer = load_model(model_id)
+        # Run model loading in a thread so the event loop stays responsive
+        model, tokenizer = await asyncio.to_thread(load_model, model_id)
         _gen_cache["gen"] = FigmentGenerator(model, tokenizer)
 
         store: FigmentStore = connect(db)
         registry = SourceRegistry.load(sources_path)
 
-        # compute_kv requires a kv_manager which we don't configure in the web app.
         crawler = Crawler(
             model, tokenizer, store, registry,
             seen_path="./seen_urls.json",
@@ -164,7 +176,10 @@ async def _run_crawl_task(
             _crawl_state["message"] = f"Crawling {sid} ({i+1}/{len(feeds)})"
             await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
-            added = crawler.crawl_feed(sid, uri, max_articles=min(per_feed, budget))
+            # Run feed crawl in thread so loop stays free
+            added = await asyncio.to_thread(
+                crawler.crawl_feed, sid, uri, min(per_feed, budget)
+            )
             stats["feeds_added"] += added
             stats["sources"].add(sid)
             budget -= added
@@ -175,7 +190,7 @@ async def _run_crawl_task(
             _crawl_state["total"] = len(seeds)
             _crawl_state["progress"] = 0
             await _broadcast({"type": "crawl_status", "data": _crawl_state})
-            added = crawler.crawl_seeds(seeds)
+            added = await asyncio.to_thread(crawler.crawl_seeds, seeds)
             stats["seeds_added"] += added
 
         _crawl_state["current_step"] = "pipeline"
@@ -184,8 +199,9 @@ async def _run_crawl_task(
         _crawl_state["total"] = 4
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
-        pipe_stats = run_pipeline(
-            model, tokenizer, store,
+        # Run pipeline in thread
+        pipe_stats = await asyncio.to_thread(
+            run_pipeline, model, tokenizer, store,
             do_summaries=summarize, do_brief=True,
         )
         _crawl_state["progress"] = 4
@@ -207,6 +223,51 @@ async def _run_crawl_task(
         _crawl_state["message"] = f"Error: {exc}"
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
         raise
+
+
+async def _run_continuous_crawl(
+    db: str,
+    sources_path: str,
+    feeds: dict[str, str],
+    seeds: list[str],
+    max_articles: int,
+    summarize: bool,
+    model_id: str,
+    interval: int,
+):
+    """Loop crawl ticks until stop_requested."""
+    global _crawl_state
+    _crawl_state["continuous"] = True
+    _crawl_state["stop_requested"] = False
+
+    while not _crawl_state.get("stop_requested"):
+        try:
+            await _run_crawl_tick(
+                db, sources_path, feeds, seeds, max_articles, summarize, model_id
+            )
+        except Exception as exc:
+            _crawl_state["message"] = f"Tick failed: {exc}; retrying in {interval}s"
+            await _broadcast({"type": "crawl_status", "data": _crawl_state})
+
+        if _crawl_state.get("stop_requested"):
+            break
+
+        _crawl_state["current_step"] = "sleeping"
+        _crawl_state["message"] = f"Sleeping {interval}s until next tick..."
+        _crawl_state["running"] = False
+        await _broadcast({"type": "crawl_status", "data": _crawl_state})
+
+        # Sleep in small chunks so we can respond to stop quickly
+        for _ in range(interval):
+            if _crawl_state.get("stop_requested"):
+                break
+            await asyncio.sleep(1)
+
+    _crawl_state["continuous"] = False
+    _crawl_state["running"] = False
+    _crawl_state["current_step"] = "idle"
+    _crawl_state["message"] = "Continuous crawl stopped"
+    await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
 
 def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> FastAPI:
@@ -340,7 +401,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
 
     @app.post("/api/crawl/run")
     async def crawl_run(request: Request):
-        """Trigger a single crawl tick + pipeline."""
+        """Trigger a single crawl tick or start continuous mode."""
         global _crawl_state
         if _crawl_state["running"]:
             return {"error": "Crawl already running", "state": _crawl_state}
@@ -353,9 +414,10 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         feeds = body.get("feeds", {})
         seeds = body.get("seeds", [])
         max_articles = body.get("max_articles", 40)
-        compute_kv = body.get("compute_kv", False)
         summarize = body.get("summarize", True)
         model_id = body.get("model_id", "unsloth/Qwen3-4B-bnb-4bit")
+        continuous = body.get("continuous", False)
+        interval = body.get("interval", 3600)
 
         # Load feeds/seeds from sources.json if not provided
         if not feeds and not seeds:
@@ -363,7 +425,6 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
                 feeds = getattr(registry, "feeds", {})
                 seeds = getattr(registry, "seeds", [])
             except Exception:
-                # fallback: read raw JSON
                 try:
                     import json as _json
                     with open(sources, "r", encoding="utf-8") as fh:
@@ -376,21 +437,32 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         if not feeds and not seeds:
             return {"error": "No feeds or seeds configured"}
 
-        task = asyncio.create_task(
-            _run_crawl_task(db, sources, feeds, seeds, max_articles, compute_kv, summarize, model_id)
-        )
+        _crawl_state["stop_requested"] = False
+
+        if continuous:
+            task = asyncio.create_task(
+                _run_continuous_crawl(
+                    db, sources, feeds, seeds, max_articles, summarize, model_id, interval
+                )
+            )
+        else:
+            task = asyncio.create_task(
+                _run_crawl_tick(
+                    db, sources, feeds, seeds, max_articles, summarize, model_id
+                )
+            )
         _crawl_state["task"] = task
-        # Strip non-JSON fields before returning state
         return_state = {k: v for k, v in _crawl_state.items() if k != "task"}
-        return {"started": True, "state": return_state}
+        return {"started": True, "continuous": continuous, "state": return_state}
 
     @app.post("/api/crawl/stop")
     def crawl_stop():
         global _crawl_state
+        _crawl_state["stop_requested"] = True
         if _crawl_state["task"] and not _crawl_state["task"].done():
             _crawl_state["task"].cancel()
             _crawl_state["running"] = False
-            _crawl_state["message"] = "Cancelled"
+            _crawl_state["message"] = "Stopping..."
             return {"stopped": True}
         return {"error": "No running crawl"}
 
@@ -404,8 +476,10 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         do_summaries = body.get("summarize", True)
         do_brief = body.get("brief", True)
         try:
-            model, tokenizer = load_model("unsloth/Qwen3-4B-bnb-4bit")
-            stats = run_pipeline(model, tokenizer, store, do_summaries=do_summaries, do_brief=do_brief)
+            model, tokenizer = await asyncio.to_thread(load_model, "unsloth/Qwen3-4B-bnb-4bit")
+            stats = await asyncio.to_thread(
+                run_pipeline, model, tokenizer, store, do_summaries=do_summaries, do_brief=do_brief
+            )
             _data_cache["data"] = None
             _warm_cache(store)
             return stats
@@ -422,9 +496,13 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         limit = body.get("limit", 500)
         top_n = body.get("top_n", 8)
         try:
-            model, tokenizer = load_model("unsloth/Qwen3-4B-bnb-4bit")
-            s1 = summarize_news.ensure_article_summaries(model, tokenizer, store, limit=limit)
-            s2 = summarize_news.build_world_brief(model, tokenizer, store, top_n=top_n)
+            model, tokenizer = await asyncio.to_thread(load_model, "unsloth/Qwen3-4B-bnb-4bit")
+            s1 = await asyncio.to_thread(
+                summarize_news.ensure_article_summaries, model, tokenizer, store, limit
+            )
+            s2 = await asyncio.to_thread(
+                summarize_news.build_world_brief, model, tokenizer, store, top_n
+            )
             _data_cache["data"] = None
             _warm_cache(store)
             return {"summaries": s1, "brief": s2}
@@ -434,15 +512,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     @app.get("/api/stats")
     def api_stats():
         """Quick store stats for dashboard."""
-        d = data()
-        return {
-            "articles": len(d["articles"]),
-            "narratives": len(d["narratives"]),
-            "derivatives": len(d["derivatives"]),
-            "sources": len(d["agenda"]),
-            "has_brief": bool(d["brief"]),
-            "last_updated": max((a.meta.get("first_seen", "") for a in d["articles"]), default=""),
-        }
+        return _get_stats(store)
 
     @app.get("/api/config")
     def api_config():
@@ -454,8 +524,9 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     async def websocket_endpoint(websocket: WebSocket):
         await websocket.accept()
         _ws_connections.append(websocket)
-        # Send initial state
+        # Send initial state + stats
         await websocket.send_text(json.dumps({"type": "crawl_status", "data": _crawl_state}))
+        await websocket.send_text(json.dumps({"type": "stats", "data": _get_stats(store)}))
         try:
             while True:
                 await websocket.receive_text()  # Keep alive / handle ping

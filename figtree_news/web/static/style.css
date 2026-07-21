@@ -80,6 +80,42 @@ a:visited {
   height: 60px;
 }
 
+/* Stats Bar */
+.stats-bar {
+  background: var(--content-bg);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.5rem 0;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 0.25rem;
+}
+
+.stat-value {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--accent-green);
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.stat-label {
+  font-size: 0.7rem;
+  color: var(--gray-text);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 /* Navigation */
 .nav {
   background: var(--light-bg);

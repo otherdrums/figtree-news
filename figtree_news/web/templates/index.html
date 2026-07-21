@@ -178,14 +178,34 @@ function connectWS() {
 connectWS();
 
 function updateCrawlUI(state) {
-  crawlRunning = state.running;
+  crawlRunning = state.running || state.continuous;
   document.getElementById('btn-crawl-once').disabled = crawlRunning;
   document.getElementById('btn-crawl-continuous').disabled = crawlRunning;
   document.getElementById('btn-crawl-stop').disabled = !crawlRunning;
 
+  // Update stats bar crawler status
+  const crawlStat = document.getElementById('crawl-status');
+  if (state.current_step === 'error') {
+    crawlStat.textContent = 'Error';
+    crawlStat.style.color = '#FF6B6B';
+  } else if (state.current_step === 'done') {
+    crawlStat.textContent = 'Done';
+    crawlStat.style.color = '#0BD6AB';
+  } else if (state.current_step === 'sleeping') {
+    crawlStat.textContent = 'Sleeping';
+    crawlStat.style.color = '#FFC107';
+  } else if (state.running) {
+    crawlStat.textContent = state.current_step;
+    crawlStat.style.color = '#A6F0FF';
+  } else {
+    crawlStat.textContent = 'Idle';
+    crawlStat.style.color = '';
+  }
+
   const isDone = state.current_step === 'done';
   const isError = state.current_step === 'error';
-  const showPanel = state.running || (!isDone && state.current_step !== 'idle') || isError;
+  const isSleeping = state.current_step === 'sleeping';
+  const showPanel = state.running || isSleeping || isError || (!isDone && state.current_step !== 'idle');
   document.getElementById('progress-panel').style.display = showPanel ? 'block' : 'none';
 
   const stepEl = document.getElementById('progress-step');
@@ -204,7 +224,7 @@ function updateCrawlUI(state) {
   if (isError) {
     document.getElementById('progress-log').innerHTML = '<span style="color:#FF6B6B">' + (state.message || 'Unknown error') + '</span>';
   }
-  if (isDone) {
+  if (isDone && !state.continuous) {
     setTimeout(() => { document.getElementById('progress-panel').style.display = 'none'; }, 5000);
   }
 }
@@ -224,8 +244,9 @@ async function runCrawl(continuous) {
   const body = {
     feeds, seeds,
     max_articles: parseInt(document.getElementById('max-articles').value),
-    compute_kv: document.getElementById('compute-kv').checked,
     summarize: document.getElementById('summarize').checked,
+    continuous: continuous,
+    interval: parseInt(document.getElementById('interval').value),
   };
   try {
     const resp = await fetch('/api/crawl/run', {
@@ -233,6 +254,9 @@ async function runCrawl(continuous) {
     });
     const data = await resp.json();
     if (data.error) alert(data.error);
+    else if (continuous) {
+      document.getElementById('progress-panel').style.display = 'block';
+    }
   } catch (e) { alert('Failed: ' + e.message); }
 }
 

@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}figtree-news{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css" />
-  <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
   <header class="header">
@@ -22,6 +21,36 @@
       </nav>
     </div>
   </header>
+
+  <!-- Live Stats Bar -->
+  <div class="stats-bar">
+    <div class="container stats-grid">
+      <div class="stat-item" id="stat-articles">
+        <span class="stat-value">--</span>
+        <span class="stat-label">Articles</span>
+      </div>
+      <div class="stat-item" id="stat-narratives">
+        <span class="stat-value">--</span>
+        <span class="stat-label">Stories</span>
+      </div>
+      <div class="stat-item" id="stat-sources">
+        <span class="stat-value">--</span>
+        <span class="stat-label">Sources</span>
+      </div>
+      <div class="stat-item" id="stat-brief">
+        <span class="stat-value">--</span>
+        <span class="stat-label">Brief</span>
+      </div>
+      <div class="stat-item" id="stat-clock">
+        <span class="stat-value" id="live-clock">--:--</span>
+        <span class="stat-label">UTC</span>
+      </div>
+      <div class="stat-item" id="stat-crawl">
+        <span class="stat-value" id="crawl-status">Idle</span>
+        <span class="stat-label">Crawler</span>
+      </div>
+    </div>
+  </div>
 
   <main>
     {% block content %}{% endblock %}
@@ -75,28 +104,31 @@
       document.getElementById('control-modal').style.display = 'none';
       document.body.style.overflow = '';
     }
-    // Close modal on Escape key
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') closeControlPanel();
     });
-  </script>
 
-  <!-- Auto-refresh check -->
-  <script>
-    let lastArticleCount = 0;
-    async function checkForUpdates() {
+    // Live clock
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('live-clock').textContent = now.toISOString().slice(11, 19) + 'Z';
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // Stats polling
+    async function updateStats() {
       try {
         const resp = await fetch('/api/stats');
-        const stats = await resp.json();
-        if (lastArticleCount && stats.articles > lastArticleCount) {
-          document.getElementById('new-articles-banner').style.display = 'flex';
-        }
-        lastArticleCount = stats.articles;
+        const s = await resp.json();
+        document.getElementById('stat-articles').querySelector('.stat-value').textContent = s.articles;
+        document.getElementById('stat-narratives').querySelector('.stat-value').textContent = s.narratives;
+        document.getElementById('stat-sources').querySelector('.stat-value').textContent = s.sources;
+        document.getElementById('stat-brief').querySelector('.stat-value').textContent = s.has_brief ? 'Yes' : 'No';
       } catch (e) {}
     }
-    // Check every 30 seconds
-    checkForUpdates();
-    setInterval(checkForUpdates, 30000);
+    updateStats();
+    setInterval(updateStats, 30000);
   </script>
 
   {% block extra_js %}{% endblock %}
