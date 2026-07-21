@@ -30,6 +30,20 @@ _STOP = {
     "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
     "January", "February", "March", "April", "May", "June", "July", "August",
     "September", "October", "November", "December", "Reuters", "AP", "BBC",
+    "Guardian", "NPR", "Aljazeera", "CNN", "NYT", "New York Times",
+    "United States", "US", "USA", "U.S.", "U.S.A.", "America", "American",
+    "United Kingdom", "UK", "U.K.", "Britain", "British", "England",
+    "Canada", "Australian", "China", "Chinese",
+    "Russia", "Russian", "Ukraine", "Ukrainian", "Iran", "Iranian",
+    "Israel", "Israeli", "Palestinian", "Palestine", "Gaza", "Hamas",
+    "President", "Prime", "Minister", "Government", "Official",
+    "World", "News", "Report", "Story", "Article", "People", "Some", "Amid",
+    "After", "Before", "During", "Following", "Because", "Despite",
+    "About", "Over", "Under", "Between", "Against", "Through", "Into",
+    "According", "Said", "Says", "Told", "New", "Old", "First", "Last",
+    "More", "Most", "Many", "Much", "Several", "One", "Two", "Three",
+    "South", "North", "East", "West",
+    "Watch", "Video", "Live", "Updated", "Breaking",
 }
 
 
@@ -66,10 +80,10 @@ def _articles(store: FigmentStore) -> list[Figment]:
 
 
 def _cluster(articles: list[Figment]) -> list[list[Figment]]:
-    """Group articles that share at least one entity (union-find)."""
-    parent = {f.figment_id: f.figment_id for f in articles}
-    ent_to_ids: dict[str, list[str]] = {}
+    """Group articles by Jaccard entity overlap (>= 0.25) instead of single shared entity."""
     by_id = {f.figment_id: f for f in articles}
+    ent_sets = {f.figment_id: _entities(f.text) for f in articles}
+    parent = {f.figment_id: f.figment_id for f in articles}
 
     def find(x):
         while parent[x] != x:
@@ -82,13 +96,17 @@ def _cluster(articles: list[Figment]) -> list[list[Figment]]:
         if ra != rb:
             parent[rb] = ra
 
-    for f in articles:
-        for e in _entities(f.text):
-            ent_to_ids.setdefault(e, []).append(f.figment_id)
+    def jaccard(a, b):
+        sa, sb = ent_sets[a], ent_sets[b]
+        inter = len(sa & sb)
+        union_len = len(sa | sb)
+        return inter / union_len if union_len else 0.0
 
-    for ids in ent_to_ids.values():
-        for other in ids[1:]:
-            union(ids[0], other)
+    fids = list(ent_sets.keys())
+    for i in range(len(fids)):
+        for j in range(i + 1, len(fids)):
+            if jaccard(fids[i], fids[j]) >= 0.25:
+                union(fids[i], fids[j])
 
     groups: dict[str, list[Figment]] = {}
     for fid in parent:
