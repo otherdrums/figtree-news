@@ -20,6 +20,7 @@ from typing import Any
 from figtree import FigmentStore, ingest_text_to_figments
 
 from .config import SourceRegistry
+from .search_index import get_index
 
 
 def _now_iso() -> str:
@@ -123,13 +124,29 @@ def ingest_articles(
             url = art.get("url")
             published = art.get("published")
             title = art.get("title")
+            author = art.get("author", "")
             for f in figments:
                 f.meta["url"] = url
                 f.meta["published"] = published
                 f.meta["title"] = title
                 f.meta["first_seen"] = _now_iso()
+                f.meta["author"] = author
+                f.meta["syndication"] = art.get("source", "")
             hidden = figments[0].boundary.shape[0]
             store.upsert(figments, hidden_size=hidden)
+
+            # Index in FTS for text search
+            image_fig = figments[0]  # the image figment
+            idx = get_index()
+            idx.index_article(
+                article_id=image_fig.figment_id,
+                title=title or "",
+                text=text,
+                author=author or "",
+                source_id=sid,
+                published=published or "",
+                first_seen=image_fig.meta.get("first_seen", ""),
+            )
 
         stats["articles"] += 1
         stats["figments"] += len(figments)

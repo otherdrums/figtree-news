@@ -15,40 +15,54 @@
       <nav class="nav">
         <ul>
           <li><a href="/">Front page</a></li>
+          <li><a href="/search">Search</a></li>
           <li><a href="/lineage">Lineage</a></li>
-          <li><a href="/api/sources">Sources (JSON)</a></li>
+          <li><a href="/api/sources">Sources</a></li>
+          <li><button id="settings-btn" class="nav-btn" onclick="toggleSettings()" title="Crawler Settings">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Settings
+          </button></li>
         </ul>
       </nav>
     </div>
   </header>
 
+  <!-- Search Bar -->
+  <div class="search-bar">
+    <div class="container search-row">
+      <input type="text" id="search-input" class="search-input" placeholder="Search topics, people, places..." value="{{ q or '' }}"
+        onkeydown="if(event.key==='Enter')doHeaderSearch()">
+      <select id="range-select" class="range-select" onchange="doHeaderSearch()">
+        <option value="all">All time</option>
+        <option value="today">Today</option>
+        <option value="yesterday">Yesterday</option>
+        <option value="last_week">Last Week</option>
+        <option value="last_month">Last Month</option>
+        <option value="last_year">Last Year</option>
+      </select>
+      <button class="btn btn-primary" onclick="doHeaderSearch()">Search</button>
+    </div>
+  </div>
+
+  <script>
+    function doHeaderSearch() {
+      const q = document.getElementById('search-input').value.trim();
+      const range = document.getElementById('range-select').value;
+      if (q || range !== 'all') {
+        window.location.href = `/search?q=${encodeURIComponent(q)}&range=${range}`;
+      }
+    }
+  </script>
+
   <!-- Live Stats Bar -->
   <div class="stats-bar">
     <div class="container stats-grid">
-      <div class="stat-item" id="stat-articles">
-        <span class="stat-value">--</span>
-        <span class="stat-label">Articles</span>
-      </div>
-      <div class="stat-item" id="stat-narratives">
-        <span class="stat-value">--</span>
-        <span class="stat-label">Stories</span>
-      </div>
-      <div class="stat-item" id="stat-sources">
-        <span class="stat-value">--</span>
-        <span class="stat-label">Sources</span>
-      </div>
-      <div class="stat-item" id="stat-brief">
-        <span class="stat-value">--</span>
-        <span class="stat-label">Brief</span>
-      </div>
-      <div class="stat-item" id="stat-clock">
-        <span class="stat-value" id="live-clock">--:--</span>
-        <span class="stat-label">UTC</span>
-      </div>
-      <div class="stat-item" id="stat-crawl">
-        <span class="stat-value" id="crawl-status">Idle</span>
-        <span class="stat-label">Crawler</span>
-      </div>
+      <div class="stat-item"><span class="stat-value" id="stat-articles">--</span><span class="stat-label">Articles</span></div>
+      <div class="stat-item"><span class="stat-value" id="stat-narratives">--</span><span class="stat-label">Stories</span></div>
+      <div class="stat-item"><span class="stat-value" id="stat-sources">--</span><span class="stat-label">Sources</span></div>
+      <div class="stat-item"><span class="stat-value" id="stat-brief">--</span><span class="stat-label">Brief</span></div>
+      <div class="stat-item"><span class="stat-value" id="live-clock">--:--</span><span class="stat-label">UTC</span></div>
+      <div class="stat-item"><span class="stat-value" id="crawl-status">Idle</span><span class="stat-label">Crawler</span></div>
     </div>
   </div>
 
@@ -56,22 +70,15 @@
     {% block content %}{% endblock %}
   </main>
 
-  <!-- Floating settings button -->
-  <button id="settings-btn" class="fab fab-settings" onclick="openControlPanel()" title="Crawler Settings & Control">
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-  </button>
-
-  <!-- Control Panel Modal -->
-  <div id="control-modal" class="modal" style="display:none;">
-    <div class="modal-overlay" onclick="closeControlPanel()"></div>
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2>Crawler Control</h2>
-        <button class="btn btn-sm btn-danger" onclick="closeControlPanel()">&times;</button>
-      </div>
-      <div class="modal-body">
-        {% block control_panel %}{% endblock %}
-      </div>
+  <!-- Slide-out Settings Panel -->
+  <div id="settings-backdrop" class="slide-backdrop" onclick="toggleSettings()" style="display:none;"></div>
+  <div id="settings-panel" class="slide-panel">
+    <div class="slide-panel-header">
+      <h2>Crawler Control</h2>
+      <button class="btn btn-sm btn-danger" onclick="toggleSettings()">&times;</button>
+    </div>
+    <div class="slide-panel-body">
+      {% block control_panel %}{% endblock %}
     </div>
   </div>
 
@@ -96,39 +103,37 @@
   </footer>
 
   <script>
-    function openControlPanel() {
-      document.getElementById('control-modal').style.display = 'block';
-      document.body.style.overflow = 'hidden';
-    }
-    function closeControlPanel() {
-      document.getElementById('control-modal').style.display = 'none';
-      document.body.style.overflow = '';
+    function toggleSettings() {
+      const panel = document.getElementById('settings-panel');
+      const backdrop = document.getElementById('settings-backdrop');
+      const open = panel.classList.toggle('open');
+      backdrop.style.display = open ? 'block' : 'none';
+      document.body.style.overflow = open ? 'hidden' : '';
     }
     document.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape') closeControlPanel();
+      if (e.key === 'Escape' && document.getElementById('settings-panel').classList.contains('open')) {
+        toggleSettings();
+      }
     });
 
     // Live clock
     function updateClock() {
-      const now = new Date();
-      document.getElementById('live-clock').textContent = now.toISOString().slice(11, 19) + 'Z';
+      document.getElementById('live-clock').textContent = new Date().toISOString().slice(11, 19) + 'Z';
     }
-    setInterval(updateClock, 1000);
-    updateClock();
+    setInterval(updateClock, 1000); updateClock();
 
     // Stats polling
     async function updateStats() {
       try {
         const resp = await fetch('/api/stats');
         const s = await resp.json();
-        document.getElementById('stat-articles').querySelector('.stat-value').textContent = s.articles;
-        document.getElementById('stat-narratives').querySelector('.stat-value').textContent = s.narratives;
-        document.getElementById('stat-sources').querySelector('.stat-value').textContent = s.sources;
-        document.getElementById('stat-brief').querySelector('.stat-value').textContent = s.has_brief ? 'Yes' : 'No';
+        document.getElementById('stat-articles').textContent = s.articles;
+        document.getElementById('stat-narratives').textContent = s.narratives;
+        document.getElementById('stat-sources').textContent = s.sources;
+        document.getElementById('stat-brief').textContent = s.has_brief ? 'Yes' : 'No';
       } catch (e) {}
     }
-    updateStats();
-    setInterval(updateStats, 30000);
+    updateStats(); setInterval(updateStats, 30000);
   </script>
 
   {% block extra_js %}{% endblock %}

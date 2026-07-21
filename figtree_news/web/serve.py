@@ -37,6 +37,7 @@ from ..crawler import Crawler
 from ..lineage import get_narratives, get_derivatives, source_agenda
 from ..pipeline import run_pipeline
 from ..query import query as run_query
+from ..search_index import get_index
 
 # Ctrl-C must kill immediately even if a background crawl thread is loading the model.
 signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
@@ -309,6 +310,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     templates = Jinja2Templates(directory=TEMPLATES_DIR)
     registry = SourceRegistry.load(sources)
     store: FigmentStore = connect(db)
+    search_idx = get_index(db.replace(".lance", "_fts.db"))
 
     app.state.store = store
     app.state.registry = registry
@@ -553,6 +555,32 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     def api_config():
         """Return feeds/seeds from sources.json for the control panel."""
         return {"feeds": registry.feeds, "seeds": registry.seeds}
+
+    @app.get("/api/search")
+    def api_search(q: str = "", range: str = "all", sort: str = "date_desc", page: int = 1, limit: int = 20):
+        """Full-text search with date range filter."""
+        result = search_idx.search(q=q, range=range, sort=sort, page=page, limit=limit)
+        # Resolve article IDs to article metadata from the data cache
+        d = data()
+        articles = []
+        for aid in result.get("article_ids", []):
+            fig = d["by_id"].get(aid)
+            if fig:
+                articles.append({
+                    "id": fig.figment_id,
+                    "title": fig.meta.get("title") or fig.text[:80],
+                    "source": fig.meta.get("source_id"),
+                    "url": fig.meta.get("url"),
+                    "published": fig.meta.get("published"),
+                    "author": fig.meta.get("author", ""),
+                    "summary": fig.meta.get("summary", ""),
+                })
+        result["articles"] = articles
+        return result
+
+    @app.get("/search")
+    def search_page(request: Request):
+        return _render(request, "search.html", {"request": request})
 
     # ---- WebSocket for live updates ------------------------------------- #
     @app.websocket("/ws")

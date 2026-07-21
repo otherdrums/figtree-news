@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Search &middot; figtree-news{% endblock %}
+{% block content %}
+<div class="container">
+  <section>
+    <h2 class="section-title">Search</h2>
+    <div id="search-results" class="articles-feed">
+      <p class="muted">Enter a search query to find articles.</p>
+    </div>
+    <div id="search-pagination" style="display:none; margin-top:1rem;">
+      <button class="btn btn-secondary" id="btn-prev">Previous</button>
+      <span id="page-info" style="margin:0 1rem;"></span>
+      <button class="btn btn-secondary" id="btn-next">Next</button>
+    </div>
+  </section>
+</div>
+
+<script>
+let currentQuery = '';
+let currentRange = 'all';
+let currentPage = 1;
+let currentSort = 'date_desc';
+
+function doSearch() {
+  const q = document.getElementById('search-input')?.value || currentQuery;
+  const range = document.getElementById('range-select')?.value || currentRange;
+  const sort = document.getElementById('sort-select')?.value || currentSort;
+  const page = 1;
+
+  if (!q.trim() && range === 'all') {
+    document.getElementById('search-results').innerHTML = '<p class="muted">Enter a search query or select a date range.</p>';
+    return;
+  }
+
+  currentQuery = q;
+  currentRange = range;
+  currentSort = sort;
+  currentPage = page;
+
+  const params = new URLSearchParams({ q, range, sort, page: String(page), limit: '20' });
+  fetch(`/api/search?${params}`)
+    .then(r => r.json())
+    .then(data => renderResults(data));
+}
+
+function renderResults(data) {
+  const el = document.getElementById('search-results');
+  const pagination = document.getElementById('search-pagination');
+  if (!data.articles || data.articles.length === 0) {
+    el.innerHTML = '<p class="muted">No articles found.</p>';
+    pagination.style.display = 'none';
+    return;
+  }
+
+  let html = `<p class="meta">${data.total} results</p>`;
+  for (const a of data.articles) {
+    html += `
+      <article class="feed-item">
+        <div class="feed-meta">
+          <a href="/source/${a.source}" class="source-badge">${a.source}</a>
+          <time>${(a.published || '').slice(0, 16)}</time>
+          ${a.author ? `<span class="meta">${a.author}</span>` : ''}
+        </div>
+        <h4><a href="/article/${a.id}">${a.title}</a></h4>
+        <p class="feed-lead">${a.summary || ''}</p>
+      </article>`;
+  }
+  el.innerHTML = html;
+
+  if (data.total_pages > 1) {
+    pagination.style.display = 'flex';
+    document.getElementById('page-info').textContent = `Page ${data.page} of ${data.total_pages}`;
+    document.getElementById('btn-prev').disabled = data.page <= 1;
+    document.getElementById('btn-next').disabled = data.page >= data.total_pages;
+  } else {
+    pagination.style.display = 'none';
+  }
+}
+
+function nextPage() { currentPage++; fetchResults(); }
+function prevPage() { currentPage = Math.max(1, currentPage - 1); fetchResults(); }
+
+function fetchResults() {
+  const params = new URLSearchParams({ q: currentQuery, range: currentRange, sort: currentSort, page: String(currentPage), limit: '20' });
+  fetch(`/api/search?${params}`)
+    .then(r => r.json())
+    .then(data => renderResults(data));
+}
+
+document.getElementById('btn-next')?.addEventListener('click', nextPage);
+document.getElementById('btn-prev')?.addEventListener('click', prevPage);
+
+// Auto-search on page load if URL has params
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.get('q')) {
+  document.getElementById('search-input').value = urlParams.get('q') || '';
+  document.getElementById('range-select').value = urlParams.get('range') || 'all';
+  doSearch();
+}
+</script>
+{% endblock %}

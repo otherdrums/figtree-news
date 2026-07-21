@@ -958,3 +958,117 @@ code {
     justify-content: center;
   }
 }
+
+/* ===== Slide-out Settings Panel ===== */
+.slide-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 199;
+}
+
+.slide-panel {
+  position: fixed;
+  right: 0;
+  top: 0;
+  width: 420px;
+  max-width: 100vw;
+  height: 100vh;
+  background: var(--content-bg);
+  border-left: 1px solid rgba(255,255,255,0.15);
+  box-shadow: -8px 0 24px rgba(0,0,0,0.5);
+  z-index: 200;
+  transform: translateX(100%);
+  transition: transform 0.3s ease;
+  overflow-y: auto;
+}
+
+.slide-panel.open {
+  transform: translateX(0);
+}
+
+.slide-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  position: sticky;
+  top: 0;
+  background: var(--content-bg);
+  z-index: 10;
+}
+
+.slide-panel-header h2 {
+  margin: 0;
+  color: var(--accent-green);
+  font-size: 1.3rem;
+}
+
+.slide-panel-body {
+  padding: 1.5rem;
+}
+
+/* ===== Search Bar ===== */
+.search-bar {
+  background: var(--content-bg);
+  padding: 0.75rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.search-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.search-input {
+  flex: 1;
+  padding: 0.55rem 0.75rem;
+  background: var(--light-bg);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  color: var(--dark-text);
+  font-size: 0.95rem;
+  font-family: inherit;
+}
+
+.search-input::placeholder {
+  color: var(--gray-text);
+  opacity: 0.6;
+}
+
+.range-select {
+  padding: 0.55rem 0.5rem;
+  background: var(--light-bg);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  color: var(--dark-text);
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+
+/* ===== Nav Button ===== */
+.nav-btn {
+  background: none;
+  border: 1px solid rgba(255,255,255,0.15);
+  color: var(--primary-blue);
+  padding: 0.3rem 0.7rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: background 0.2s;
+}
+
+.nav-btn:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+/* Hide old FAB (replaced by nav button) */
+.fab {
+  display: none;
+}

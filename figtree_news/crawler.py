@@ -136,6 +136,7 @@ class Crawler:
         text = None
         title = None
         published = None
+        author = ""
         try:
             import trafilatura  # type: ignore
 
@@ -144,6 +145,7 @@ class Crawler:
             if meta:
                 title = getattr(meta, "title", None)
                 published = getattr(meta, "date", None)
+                author = getattr(meta, "author", "") or ""
         except Exception:
             pass
 
@@ -158,6 +160,7 @@ class Crawler:
             "text": text,
             "title": title,
             "published": published,
+            "author": author,
             "links": sorted(links),
             "error": None,
         }
