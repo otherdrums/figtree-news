@@ -22,14 +22,23 @@
     <div class="narrative-grid">
       {% for n in narratives %}
       <article class="narrative-card">
+        {% set lead_video = '' %}
         {% set lead_img = '' %}
         {% for member_id in n.members %}
           {% set article = by_id.get(member_id) %}
-          {% if article and article.meta.get('image_url') and not lead_img %}
-            {% set lead_img = article.meta.get('image_url') %}
+          {% if article %}
+            {% if article.meta.get('video_url') and not lead_video %}
+              {% set lead_video = article.meta.get('video_url') %}
+            {% elif article.meta.get('image_url') and not lead_img %}
+              {% set lead_img = article.meta.get('image_url') %}
+            {% endif %}
           {% endif %}
         {% endfor %}
-        {% if lead_img %}
+        {% if lead_video %}
+        <div class="narrative-video">
+          <iframe src="{{ lead_video }}" frameborder="0" allowfullscreen loading="lazy"></iframe>
+        </div>
+        {% elif lead_img %}
         <div class="narrative-image">
           <img src="{{ lead_img }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
         </div>
@@ -75,7 +84,11 @@
               <p class="version-author">by {{ article.meta.get('author') }}</p>
               {% endif %}
               <p class="version-lead">{{ article.meta.get('summary') or article.text[:180] }}{% if article.text | length > 180 %}...{% endif %}</p>
-              {% if article.meta.get('image_url') %}
+              {% if article.meta.get('video_url') %}
+              <div class="version-video">
+                <iframe src="{{ article.meta.get('video_url') }}" frameborder="0" allowfullscreen loading="lazy"></iframe>
+              </div>
+              {% elif article.meta.get('image_url') %}
               <div class="version-thumb">
                 <img src="{{ article.meta.get('image_url') }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
               </div>
@@ -138,7 +151,17 @@
           {% endif %}
         </div>
         <div class="feed-body">
-          {% if a.meta.get('image_url') %}
+          {% if a.meta.get('video_url') %}
+          <div class="feed-thumb feed-thumb-video">
+            <a href="{{ a.meta.get('video_url') }}" target="_blank" rel="noopener">
+              {% if a.meta.get('image_url') %}
+              <img src="{{ a.meta.get('image_url') }}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='&#9654;'">
+              {% else %}
+              <span class="video-play-icon">&#9654;</span>
+              {% endif %}
+            </a>
+          </div>
+          {% elif a.meta.get('image_url') %}
           <div class="feed-thumb">
             <img src="{{ a.meta.get('image_url') }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
           </div>

@@ -60,6 +60,7 @@ def _read_feed(uri: str, source_id: str) -> list[dict[str, Any]]:
 
         # Extract article image from feed metadata
         image_url = _extract_feed_image(entry)
+        video_url = _extract_video_url(entry)
 
         articles.append(
             {
@@ -70,6 +71,7 @@ def _read_feed(uri: str, source_id: str) -> list[dict[str, Any]]:
                 "author": entry.get("author"),
                 "published": entry.get("published"),
                 "image_url": image_url,
+                "video_url": video_url,
             }
         )
     return articles
@@ -87,23 +89,48 @@ def _extract_feed_image(entry) -> str | None:
     for thumb in entry.get("media_thumbnail", []):
         if thumb.get("url"):
             return thumb["url"]
-    # 3. enclosures with image type
+    # 3. YouTube media_group → media_thumbnail
+    for group in entry.get("media_group", []):
+        if isinstance(group, dict):
+            for thumb in group.get("media_thumbnail", []):
+                if isinstance(thumb, dict) and thumb.get("url"):
+                    return thumb["url"]
+    # 4. enclosures with image type
     for enc in entry.get("enclosures", []):
         href = enc.get("href") or enc.get("url", "")
         etype = enc.get("type", "")
         if href and (etype.startswith("image/") or href.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))):
             return href
-    # 4. media:thumbnail as single dict (some feeds)
+    # 5. media:thumbnail as single dict (some feeds)
     mt = entry.get("media_thumbnail")
     if isinstance(mt, dict) and mt.get("url"):
         return mt["url"]
-    # 5. enclosure as single dict
+    # 6. enclosure as single dict
     enc = entry.get("enclosure")
     if isinstance(enc, dict):
         href = enc.get("href") or enc.get("url", "")
         etype = enc.get("type", "")
         if href and (etype.startswith("image/") or href.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))):
             return href
+    return None
+
+
+def _extract_video_url(entry) -> str | None:
+    """Extract a video embed or watch URL from a feed entry (YouTube, Rumble, etc.)."""
+    link = entry.get("link") or ""
+    # YouTube watch URL → embed URL
+    import re
+    yt_match = re.search(r'(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]+)', link)
+    if yt_match:
+        return f"https://www.youtube.com/embed/{yt_match.group(1)}"
+    # Rumble URL → embed
+    rumble_match = re.search(r'rumble\.com/(?:embed/)?v([\w-]+)', link)
+    if rumble_match:
+        return f"https://rumble.com/embed/{rumble_match.group(0).split('/')[-1]}"
+    # Check media_content for video type
+    for media in entry.get("media_content", []):
+        if media.get("medium") == "video" or media.get("type", "").startswith("video/"):
+            return media.get("url")
     return None
 
 
@@ -163,6 +190,7 @@ def ingest_articles(
             title = art.get("title")
             author = art.get("author", "")
             image_url = art.get("image_url") or ""
+            video_url = art.get("video_url") or ""
             for f in figments:
                 f.meta["url"] = url
                 f.meta["published"] = published
@@ -171,6 +199,7 @@ def ingest_articles(
                 f.meta["author"] = author
                 f.meta["syndication"] = art.get("source", "")
                 f.meta["image_url"] = image_url
+                f.meta["video_url"] = video_url
             hidden = figments[0].boundary.shape[0]
             store.upsert(figments, hidden_size=hidden)
 

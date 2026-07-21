@@ -4,7 +4,11 @@
 <section class="content">
   <div class="container">
     <article class="article">
-      {% if article.meta.get("image_url") %}
+      {% if article.meta.get("video_url") %}
+      <div class="article-video">
+        <iframe src="{{ article.meta.get('video_url') }}" frameborder="0" allowfullscreen loading="lazy"></iframe>
+      </div>
+      {% elif article.meta.get("image_url") %}
       <div class="article-hero">
         <img src="{{ article.meta.get('image_url') }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
       </div>

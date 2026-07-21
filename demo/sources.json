@@ -4,28 +4,28 @@
     "base_trust": 0.9,
     "url": "https://www.bbc.com/news",
     "kind": "news",
-    "logo_url": "https://static.files.bbci.co.uk/core/website/assets/static/img/bbc-news/bbc-news-wordmark-black.png"
+    "logo_url": "https://www.google.com/s2/favicons?domain=bbc.com&sz=64"
   },
   "aljazeera": {
     "name": "Al Jazeera",
     "base_trust": 0.85,
     "url": "https://www.aljazeera.com/",
     "kind": "news",
-    "logo_url": "https://www.aljazeera.com/images/logoaje/en/AJE-logo-200x148.png"
+    "logo_url": "https://www.google.com/s2/favicons?domain=aljazeera.com&sz=64"
   },
   "npr":      {
     "name": "NPR",
     "base_trust": 0.9,
     "url": "https://www.npr.org/",
     "kind": "news",
-    "logo_url": "https://media.npr.org/images/podcasts/primary/general.png"
+    "logo_url": "https://www.google.com/s2/favicons?domain=npr.org&sz=64"
   },
   "guardian": {
     "name": "The Guardian",
     "base_trust": 0.85,
     "url": "https://www.theguardian.com/",
     "kind": "news",
-    "logo_url": "https://assets.guim.co.uk/images/guardian-logo-640.png"
+    "logo_url": "https://www.google.com/s2/favicons?domain=theguardian.com&sz=64"
   },
 
   "feeds": {

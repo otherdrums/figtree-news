@@ -256,6 +256,7 @@ class Crawler:
                 "title": page.get("title"),
                 "published": page.get("published"),
                 "image_url": page.get("image_url"),
+                "video_url": page.get("video_url"),
             }
             if self.ingest_article(sid, art):
                 added += 1
