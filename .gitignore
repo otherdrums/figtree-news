@@ -12,6 +12,9 @@ dist/
 
 # Data / outputs (keep the code, not the ingested stores)
 *.lance/
+*_fts.db
+*_fts.db-shm
+*_fts.db-wal
 graph.json
 eval_report.json
 seen_urls.json

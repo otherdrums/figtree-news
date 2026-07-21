@@ -65,6 +65,20 @@ def _can_fetch(url: str) -> bool:
         return True
 
 
+def _extract_og_image(html: str) -> str | None:
+    """Extract og:image or twitter:image from raw HTML."""
+    for pattern in [
+        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+        r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
+    ]:
+        m = re.search(pattern, html, re.IGNORECASE)
+        if m:
+            return m.group(1)
+    return None
+
+
 class Crawler:
     def __init__(
         self,
@@ -138,6 +152,7 @@ class Crawler:
         title = None
         published = None
         author = ""
+        image_url = None
         try:
             import trafilatura  # type: ignore
 
@@ -147,8 +162,13 @@ class Crawler:
                 title = getattr(meta, "title", None)
                 published = getattr(meta, "date", None)
                 author = getattr(meta, "author", "") or ""
+                image_url = getattr(meta, "image", None)
         except Exception:
             pass
+
+        # Fallback: extract og:image directly from HTML if trafilatura missed it
+        if not image_url:
+            image_url = _extract_og_image(html or "")
 
         links = set()
         for m in re.findall(r'href=["\']([^"\']+)["\']', html or ""):
@@ -162,6 +182,7 @@ class Crawler:
             "title": title,
             "published": published,
             "author": author,
+            "image_url": image_url,
             "links": sorted(links),
             "error": None,
         }
@@ -234,6 +255,7 @@ class Crawler:
                 "url": url,
                 "title": page.get("title"),
                 "published": page.get("published"),
+                "image_url": page.get("image_url"),
             }
             if self.ingest_article(sid, art):
                 added += 1

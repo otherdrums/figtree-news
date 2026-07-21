@@ -22,6 +22,18 @@
     <div class="narrative-grid">
       {% for n in narratives %}
       <article class="narrative-card">
+        {% set lead_img = '' %}
+        {% for member_id in n.members %}
+          {% set article = by_id.get(member_id) %}
+          {% if article and article.meta.get('image_url') and not lead_img %}
+            {% set lead_img = article.meta.get('image_url') %}
+          {% endif %}
+        {% endfor %}
+        {% if lead_img %}
+        <div class="narrative-image">
+          <img src="{{ lead_img }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
+        </div>
+        {% endif %}
         <div class="narrative-header">
           <h3 class="narrative-title">
             <a href="/narrative/{{ n.narrative_id }}">
@@ -45,7 +57,13 @@
             {% if article %}
             <div class="source-version" data-source="{{ article.meta.get('source_id', '') }}">
               <div class="version-header">
-                <a href="/source/{{ article.meta.get('source_id') }}" class="source-badge">{{ article.meta.get('source_id') }}</a>
+                <a href="/source/{{ article.meta.get('source_id') }}" class="source-badge">
+                  {% set sid = article.meta.get('source_id', '') %}
+                  {% if source_logos.get(sid) %}
+                  <img src="{{ source_logos[sid] }}" class="source-logo-inline" alt="" loading="lazy" onerror="this.style.display='none'">
+                  {% endif %}
+                  {{ sid }}
+                </a>
                 {% if article.meta.get('published') %}
                 <time class="published-date" datetime="{{ article.meta.get('published') }}">{{ article.meta.get('published')[:16] if article.meta.get('published') else '' }}</time>
                 {% endif %}
@@ -53,7 +71,15 @@
               <h4 class="version-headline">
                 <a href="/article/{{ article.figment_id }}">{{ article.meta.get('title') or article.text[:100] }}</a>
               </h4>
+              {% if article.meta.get('author') %}
+              <p class="version-author">by {{ article.meta.get('author') }}</p>
+              {% endif %}
               <p class="version-lead">{{ article.meta.get('summary') or article.text[:180] }}{% if article.text | length > 180 %}...{% endif %}</p>
+              {% if article.meta.get('image_url') %}
+              <div class="version-thumb">
+                <img src="{{ article.meta.get('image_url') }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
+              </div>
+              {% endif %}
               <a href="/article/{{ article.figment_id }}" class="read-more">Read full article &rarr;</a>
             </div>
             {% endif %}
@@ -75,7 +101,14 @@
         <tr><th>Source</th><th>Trust</th><th>Led</th><th>Echoed</th><th>Contradicts</th></tr>
         {% for sid, info in agenda.items() %}
           <tr>
-            <td><a href="/source/{{ sid }}">{{ sid }}</a></td>
+            <td>
+              <a href="/source/{{ sid }}" class="source-badge source-badge-full">
+                {% if source_logos.get(sid) %}
+                <img src="{{ source_logos[sid] }}" class="source-logo-inline" alt="" loading="lazy" onerror="this.style.display='none'">
+                {% endif %}
+                {{ sid }}
+              </a>
+            </td>
             <td>{{ "%.2f"|format(info.adjusted_trust) }}</td>
             <td>{{ info.led }}</td>
             <td>{{ info.echoed }}</td>
@@ -93,13 +126,28 @@
       {% for a in articles %}
       <article class="feed-item">
         <div class="feed-meta">
-          <a href="/source/{{ a.meta.get('source_id') }}" class="source-badge">{{ a.meta.get('source_id') }}</a>
+          <a href="/source/{{ a.meta.get('source_id') }}" class="source-badge">
+            {% set sid = a.meta.get('source_id', '') %}
+            {% if source_logos.get(sid) %}
+            <img src="{{ source_logos[sid] }}" class="source-logo-inline" alt="" loading="lazy" onerror="this.style.display='none'">
+            {% endif %}
+            {{ sid }}
+          </a>
           {% if a.meta.get('published') %}
           <time>{{ a.meta.get('published')[:16] }}</time>
           {% endif %}
         </div>
-        <h4><a href="/article/{{ a.figment_id }}">{{ a.meta.get('title') or a.text[:80] }}</a></h4>
-        <p class="feed-lead">{{ a.meta.get('summary') or a.text[:160] }}...</p>
+        <div class="feed-body">
+          {% if a.meta.get('image_url') %}
+          <div class="feed-thumb">
+            <img src="{{ a.meta.get('image_url') }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
+          </div>
+          {% endif %}
+          <div class="feed-text">
+            <h4><a href="/article/{{ a.figment_id }}">{{ a.meta.get('title') or a.text[:80] }}</a></h4>
+            <p class="feed-lead">{{ a.meta.get('summary') or a.text[:160] }}...</p>
+          </div>
+        </div>
       </article>
       {% endfor %}
     </div>

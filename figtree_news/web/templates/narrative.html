@@ -3,6 +3,18 @@
 {% block content %}
 <div class="container">
   <section>
+    {% set lead_img = '' %}
+    {% for m in members %}
+      {% if m.meta.get('image_url') and not lead_img %}
+        {% set lead_img = m.meta.get('image_url') %}
+      {% endif %}
+    {% endfor %}
+    {% if lead_img %}
+    <div class="narrative-image">
+      <img src="{{ lead_img }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
+    </div>
+    {% endif %}
+
     <h2>{{ narrative.title or narrative.text[:80] }}</h2>
     <p class="meta">{{ narrative.text }}</p>
     <p class="meta">Entities: {{ narrative.entities | join(", ") }}</p>
@@ -10,7 +22,13 @@
     <section>
       <h3>First reporter</h3>
       <p>
-        <a href="/source/{{ narrative.first_reporter }}">{{ narrative.first_reporter }}</a>
+        <a href="/source/{{ narrative.first_reporter }}" class="source-badge source-badge-full">
+          {% set sid = narrative.first_reporter %}
+          {% if source_logos.get(sid) %}
+          <img src="{{ source_logos[sid] }}" class="source-logo-inline" alt="" loading="lazy" onerror="this.style.display='none'">
+          {% endif %}
+          {{ sid }}
+        </a>
         {% if narrative.first_reporter_url %}
           &middot; <a href="{{ narrative.first_reporter_url }}">original article</a>
         {% endif %}
@@ -21,7 +39,15 @@
       <h3>Outlets covering this story</h3>
       <ul class="stories">
         {% for s in narrative.sources %}
-          <li><a href="/source/{{ s }}">{{ s }}</a>{% if s == narrative.first_reporter %} <span class="tag">first</span>{% endif %}</li>
+          <li>
+            <a href="/source/{{ s }}" class="source-badge source-badge-full">
+              {% if source_logos.get(s) %}
+              <img src="{{ source_logos[s] }}" class="source-logo-inline" alt="" loading="lazy" onerror="this.style.display='none'">
+              {% endif %}
+              {{ s }}
+            </a>
+            {% if s == narrative.first_reporter %} <span class="tag">first</span>{% endif %}
+          </li>
         {% endfor %}
       </ul>
     </section>
@@ -31,8 +57,21 @@
       <ul class="articles">
         {% for m in members %}
           <li>
+            {% if m.meta.get('image_url') %}
+            <div class="feed-thumb" style="margin-bottom:0.5rem">
+              <img src="{{ m.meta.get('image_url') }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
+            </div>
+            {% endif %}
             <a href="/article/{{ m.figment_id }}">{{ m.meta.get("title") or m.text[:80] }}</a>
-            <span class="meta"><a href="/source/{{ m.meta.get('source_id') }}">{{ m.meta.get('source_id') }}</a></span>
+            <span class="meta">
+              <a href="/source/{{ m.meta.get('source_id') }}" class="source-badge source-badge-full">
+                {% set sid = m.meta.get('source_id') %}
+                {% if source_logos.get(sid) %}
+                <img src="{{ source_logos[sid] }}" class="source-logo-inline" alt="" loading="lazy" onerror="this.style.display='none'">
+                {% endif %}
+                {{ sid }}
+              </a>
+            </span>
             {% if m.meta.get("url") %}&middot; <a href="{{ m.meta.get('url') }}">source</a>{% endif %}
           </li>
         {% endfor %}

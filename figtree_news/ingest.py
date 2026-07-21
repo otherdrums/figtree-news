@@ -57,6 +57,10 @@ def _read_feed(uri: str, source_id: str) -> list[dict[str, Any]]:
         text = (summary + "\n\n" + body).strip() if body else summary
         if not text.strip():
             continue
+
+        # Extract article image from feed metadata
+        image_url = _extract_feed_image(entry)
+
         articles.append(
             {
                 "source_id": source_id,
@@ -65,9 +69,42 @@ def _read_feed(uri: str, source_id: str) -> list[dict[str, Any]]:
                 "title": entry.get("title"),
                 "author": entry.get("author"),
                 "published": entry.get("published"),
+                "image_url": image_url,
             }
         )
     return articles
+
+
+def _extract_feed_image(entry) -> str | None:
+    """Extract the best image URL from an RSS/Atom feed entry."""
+    # 1. media_content (media RSS namespace)
+    for media in entry.get("media_content", []):
+        if media.get("medium") == "image" or (
+            media.get("url", "").lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))
+        ):
+            return media["url"]
+    # 2. media_thumbnail
+    for thumb in entry.get("media_thumbnail", []):
+        if thumb.get("url"):
+            return thumb["url"]
+    # 3. enclosures with image type
+    for enc in entry.get("enclosures", []):
+        href = enc.get("href") or enc.get("url", "")
+        etype = enc.get("type", "")
+        if href and (etype.startswith("image/") or href.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))):
+            return href
+    # 4. media:thumbnail as single dict (some feeds)
+    mt = entry.get("media_thumbnail")
+    if isinstance(mt, dict) and mt.get("url"):
+        return mt["url"]
+    # 5. enclosure as single dict
+    enc = entry.get("enclosure")
+    if isinstance(enc, dict):
+        href = enc.get("href") or enc.get("url", "")
+        etype = enc.get("type", "")
+        if href and (etype.startswith("image/") or href.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))):
+            return href
+    return None
 
 
 def _read_article_file(path: str) -> list[dict[str, Any]]:
@@ -125,6 +162,7 @@ def ingest_articles(
             published = art.get("published")
             title = art.get("title")
             author = art.get("author", "")
+            image_url = art.get("image_url") or ""
             for f in figments:
                 f.meta["url"] = url
                 f.meta["published"] = published
@@ -132,6 +170,7 @@ def ingest_articles(
                 f.meta["first_seen"] = _now_iso()
                 f.meta["author"] = author
                 f.meta["syndication"] = art.get("source", "")
+                f.meta["image_url"] = image_url
             hidden = figments[0].boundary.shape[0]
             store.upsert(figments, hidden_size=hidden)
 

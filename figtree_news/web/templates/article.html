@@ -4,9 +4,21 @@
 <section class="content">
   <div class="container">
     <article class="article">
+      {% if article.meta.get("image_url") %}
+      <div class="article-hero">
+        <img src="{{ article.meta.get('image_url') }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
+      </div>
+      {% endif %}
       <h2>{{ article.meta.get("title") or article.text[:120] }}</h2>
       <p class="meta">
-        Source: <a href="/source/{{ article.meta.get('source_id') }}">{{ article.meta.get("source_id") }}</a>
+        Source: <a href="/source/{{ article.meta.get('source_id') }}" class="source-badge source-badge-full">
+          {% set sid = article.meta.get('source_id', '') %}
+          {% if source_logos.get(sid) %}
+          <img src="{{ source_logos[sid] }}" class="source-logo-inline" alt="" loading="lazy" onerror="this.style.display='none'">
+          {% endif %}
+          {{ sid }}
+        </a>
+        {% if article.meta.get("author") %} &middot; by {{ article.meta.get("author") }}{% endif %}
         {% if article.meta.get("url") %}&middot; <a href="{{ article.meta.get('url') }}">Original article</a>{% endif %}
         {% if article.meta.get("published") %}&middot; {{ article.meta.get("published") }}{% endif %}
       </p>

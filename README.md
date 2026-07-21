@@ -25,15 +25,17 @@ pip install -e .        # installs figtree-news + pulls in figtree's deps
 # (or) pip install -r requirements.txt   # after figtree is installed
 ```
 
-Runtime deps: `typer`, `feedparser` (for feeds), and transitively `torch`,
+Runtime deps: `typer`, `feedparser` (for feeds), `httpx` (for crawling),
+`trafilatura` (for article extraction), and transitively `torch`,
 `transformers`, `lancedb` (via figtree).
 
 ## Quick start
 
 ```bash
 # 1. Point a source registry at your outlets (initial trust per source)
-cp examples/sample_sources.json ./sources.json
+cp demo/sources.json ./sources.json
 #    edit base_trust: e.g. reuters 0.9, a random blog 0.5
+#    add logo_url for branding in the web UI
 
 # 2. Crawl the web continuously (feeds + bounded link-follower). Needs a GPU.
 figtree-news crawl \
@@ -41,75 +43,134 @@ figtree-news crawl \
   --seed "https://news.example.org/" \
   --loop --interval 3600
 
-# 3. Inspect trust, lineage, and export the graph
-figtree-news show-source-trust
-figtree-news lineage
-figtree-news export-graph --out graph.json
+# 3. Deep initial crawl (backfill mode, 200 article cap)
+figtree-news crawl --backfill --once
 
 # 4. Serve the interactive web newspaper (FastAPI)
 figtree-news serve --port 8000
-#   open http://127.0.0.1:8000  (front page, per-source, per-narrative, lineage)
+#   open http://127.0.0.1:8000  (front page, per-source, per-narrative, search, lineage)
 
 # 5. Ask, only trusting figments from sources above a credibility bar
 figtree-news query "What happened at Davos?" --min-trust 0.6 --faithful
 
-# 6. Offline snapshot / eval
-figtree-news build-newspaper --out newspaper.json
-figtree-news eval --out eval_report.json
+# 6. Inspect trust, lineage, and export the graph
+figtree-news show-source-trust
+figtree-news lineage
+figtree-news export-graph --out graph.json
+```
+
+## Features
+
+### Web Newspaper (FastAPI)
+
+- **Front page** with world brief, newspaper-style narrative comparison cards
+  (headline + source badges + lead paragraph + dates + article images)
+- **Source logos** displayed next to source badges throughout the UI
+- **Article images** from RSS `media_content`/`media_thumbnail` and `og:image` extraction
+- **Author bylines** on articles where available
+- **Full-text search** (SQLite FTS5) with date range filters and BM25 ranking
+- **Slide-out control panel** for managing feeds, crawl settings, and actions
+- **Live stats bar** (articles, stories, sources, brief, UTC clock, crawler status)
+- **WebSocket progress** for real-time crawl status updates
+- **Responsive design** with benthic.io dark theme
+
+### Media & Branding
+
+- **Article images** extracted from RSS feeds (`media_content`, `media_thumbnail`, `enclosures`) and web pages (`og:image`, `twitter:image` via trafilatura + regex fallback)
+- **Source logos** configured per-source in `sources.json` via `logo_url` field
+- Images displayed in narrative cards, article pages, feed items, and source pages
+- Graceful fallback: images fail silently with `onerror="this.parentElement.style.display='none'"`
+
+### Trust & Lineage
+
+- Per-source `base_trust` in `sources.json` → figtree trust propagation
+- **Narrative clustering** via entity overlap (Jaccard ≥ 0.25)
+- **First reporter detection** (earliest published/first_seen)
+- **Derivative edge detection** (echo chains between outlets)
+- **Frame shift detection** — cosine boundary similarity < 0.85 between newest and first article marks a story as framing-shifted
+- **Contradiction awareness** across sources
+
+### Pipeline
+
+```
+crawl → ingest → trust → lineage → summaries → world brief
+  │        │       │         │          │            └─ /api/stats
+  │        │       │         │          └─ per-article summaries
+  │        │       │         └─ narrative + derivative + frame shift
+  │        │       └─ source trust propagation (idempotent, store-persisted)
+  │        └─ articles → figments (sentence-level + image)
+  └─ RSS feeds + bounded link-follower (URL dedup, robots.txt)
 ```
 
 ## Architecture
 
 ```
-article (text)  + provenance (url, published, first_seen, title)
-   └─ ingest_text_to_figments ─► Image figment (parent)
-                                    ├─ atomic figment (sentence)  source_id set
-                                    ├─ atomic figment (sentence)  base_trust stamped
-                                    └─ ...
-
-crawler (GPU)  ──►  trust ──►  lineage ──►  summaries/brief  ──►  LanceDB store
-   feeds + bounded link-follower, URL-deduped, robots-respecting
-
-serve (FastAPI, CPU)  reads the store and renders the newspaper:
-   front page · per-article · per-source · per-narrative · lineage view
+figtree_news/
+├── config.py              # SourceRegistry: source_id → {name, base_trust, url, logo_url}
+├── ingest.py              # Feed/article → figments with full provenance + image extraction
+├── crawler.py             # Continuous web crawler: feeds + BFS link-follower
+├── pipeline.py            # Orchestration: trust → lineage → summaries → brief
+├── lineage.py             # Narrative clustering, frame shift detection, derivative edges
+├── trust.py               # Source trust propagation
+├── summarize_news.py      # Per-article summaries + world brief
+├── query.py               # Embed query → nearest figments → generate
+├── search_index.py        # SQLite FTS5 full-text search index
+├── eval.py                # Per-source faithful-recall eval
+├── export.py              # Graph export as JSON
+├── cli.py                 # Typer CLI: crawl, serve, query, lineage, export, eval
+└── web/
+    ├── serve.py            # FastAPI app: HTML pages + JSON API + WebSocket
+    ├── templates/          # Jinja2: base, index, article, source, narrative, lineage, search
+    └── static/style.css    # benthic.io dark theme
 ```
 
-### Provenance & lineage (the "who broke it first" engine)
+### Source registry
 
-Every figment carries its `url`, `published` date, and `first_seen` timestamp, so
-the newspaper always links back to the original outlet. After each crawl tick,
-`figtree_news.lineage` clusters articles by shared entities and, per cluster:
+`sources.json` is a map of `source_id -> {name, base_trust, url, kind, logo_url}`.
 
-* marks the **first reporter** (earliest `published`/`first_seen`);
-* marks later articles covering the same story as **derivative** of it (an echo
-  chain), persisted as `derivative:{orig}:{der}` edge figments;
-* groups the cluster into a **narrative** figment listing the outlets involved,
-  the first reporter, and the stance lean.
-
-`figtree_news.pipeline.run_pipeline` ties it together: trust → lineage →
-per-article summaries → a single "world brief", all pre-generated on the
-crawler so the web viewer needs no GPU.
-
-Each command maps to a module:
-
-| Command | Module | What it does |
-|---------|--------|--------------|
-| `ingest-feed` / `ingest-file` | `figtree_news.ingest` | Articles → figments (reuses library ingest; tags `source_id`, stamps `base_trust`, stamps provenance) |
-| `crawl` | `figtree_news.crawler` + `pipeline` | Feeds + bounded link-follower → ingest → trust → lineage → summaries → world brief |
-| `update-trust` / `show-source-trust` | `figtree_news.trust` | Build edges + persist/show adjusted per-source trust |
-| `lineage` | `figtree_news.lineage` | Compute/persist narrative + derivative (first-reporter) lineage — CPU only |
-| `query` | `figtree_news.query` | Embed query → nearest figments → filter by trust → generate |
-| `export-graph` | `figtree_news.export` | Dump nodes+edges as JSON (no graph lib needed) |
-| `serve` | `figtree_news.web.serve` | Interactive FastAPI newspaper (front page, article, source, narrative, lineage, JSON API) |
-| `build-newspaper` | `figtree_news.cli` | Dump a static front-page snapshot as JSON |
-| `eval` | `figtree_news.eval` | Per-source faithful-recall score + trust shift + contradictions |
-
-## Source registry
-
-`sources.json` is a map of `source_id -> {name, base_trust, url, kind}`.
 `base_trust` is the outlet's starting credibility and feeds figtree's trust
-model. This is the only place an editorial judgement about a source lives; the
-library stays agnostic.
+model. `logo_url` is the source's brand logo (displayed in the web UI).
+
+```json
+{
+  "bbc": {
+    "name": "BBC News",
+    "base_trust": 0.9,
+    "url": "https://www.bbc.com/news",
+    "kind": "news",
+    "logo_url": "https://static.files.bbci.co.uk/core/website/assets/static/img/bbc-news/bbc-news-wordmark-black.png"
+  },
+  "feeds": { "bbc": "http://feeds.bbci.co.uk/news/rss.xml" },
+  "seeds": []
+}
+```
+
+### Data storage
+
+- **LanceDB** — all figments (articles, narratives, edges, trust assertions)
+- **SQLite FTS5** — full-text search index (auto-created at `{db}.replace('.lance', '_fts.db')`)
+- **seen_urls.json** — URL dedup for crawl idempotency
+- **KV cache** (optional) — quantized K/V blobs for boundary-based generation
+
+### Web API
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Front page (brief, narratives, articles, trust board) |
+| `/article/{fid}` | GET | Article detail page |
+| `/source/{sid}` | GET | Source page with articles and narratives |
+| `/narrative/{nid}` | GET | Narrative detail with all source versions |
+| `/lineage` | GET | First-reporter / echo-chain view |
+| `/search` | GET | Full-text search with date range filters |
+| `/api/search?q=&range=&sort=&page=` | GET | JSON search results (BM25) |
+| `/api/stats` | GET | Store stats (articles, narratives, sources, brief) |
+| `/api/narratives` | GET | JSON list of all narratives |
+| `/api/sources` | GET | JSON source trust agenda |
+| `/api/crawl/status` | GET | Crawler state |
+| `/api/crawl/run` | POST | Start crawl (continuous or once) |
+| `/api/crawl/stop` | POST | Stop continuous crawl |
+| `/api/pipeline/run` | POST | Run trust → lineage → summaries |
+| `/ws` | WebSocket | Live crawl status updates |
 
 ## Tests
 
@@ -121,10 +182,6 @@ web app (page render + JSON API via `TestClient`):
 ```bash
 pytest tests/
 ```
-
-End-to-end crawl/ingest/summarize/query/eval require a GPU and the reference
-model. For 24/7 operation, run the two processes as systemd services (see
-below) — no containers needed.
 
 ## Deployment with systemd (no containers)
 
@@ -150,9 +207,10 @@ systemctl --user enable --now figtree-news-crawler figtree-news-web
   GPU without affecting browsing.
 * Both services restart automatically on failure (`Restart=on-failure`).
 
-Before starting the crawler, create `sources.json` (see
-`examples/sample_sources.json`) with your outlets' `base_trust` and, optionally,
-`feeds`/`seeds` keys for the `crawl` command.
+## Model
+
+Default: Qwen3-4B (unsloth bnb-4bit, cached at ~/.cache/huggingface/hub/)
+GPU: Quadro T1000 (3GB VRAM)
 
 ## Scope
 

@@ -1,8 +1,32 @@
 {
-  "bbc":      { "name": "BBC News", "base_trust": 0.9, "url": "https://www.bbc.com/news", "kind": "news" },
-  "aljazeera":{ "name": "Al Jazeera", "base_trust": 0.85, "url": "https://www.aljazeera.com/", "kind": "news" },
-  "npr":      { "name": "NPR", "base_trust": 0.9, "url": "https://www.npr.org/", "kind": "news" },
-  "guardian": { "name": "The Guardian", "base_trust": 0.85, "url": "https://www.theguardian.com/", "kind": "news" },
+  "bbc":      {
+    "name": "BBC News",
+    "base_trust": 0.9,
+    "url": "https://www.bbc.com/news",
+    "kind": "news",
+    "logo_url": "https://static.files.bbci.co.uk/core/website/assets/static/img/bbc-news/bbc-news-wordmark-black.png"
+  },
+  "aljazeera": {
+    "name": "Al Jazeera",
+    "base_trust": 0.85,
+    "url": "https://www.aljazeera.com/",
+    "kind": "news",
+    "logo_url": "https://www.aljazeera.com/images/logoaje/en/AJE-logo-200x148.png"
+  },
+  "npr":      {
+    "name": "NPR",
+    "base_trust": 0.9,
+    "url": "https://www.npr.org/",
+    "kind": "news",
+    "logo_url": "https://media.npr.org/images/podcasts/primary/general.png"
+  },
+  "guardian": {
+    "name": "The Guardian",
+    "base_trust": 0.85,
+    "url": "https://www.theguardian.com/",
+    "kind": "news",
+    "logo_url": "https://assets.guim.co.uk/images/guardian-logo-640.png"
+  },
 
   "feeds": {
     "bbc": "http://feeds.bbci.co.uk/news/rss.xml",

@@ -19,6 +19,7 @@ class SourceConfig:
     base_trust: float = 0.5
     url: str | None = None
     kind: str = "news"  # news | blog | social | official
+    logo_url: str | None = None
 
 
 class SourceRegistry:
@@ -47,6 +48,7 @@ class SourceRegistry:
                 base_trust=float(spec.get("base_trust", 0.5)),
                 url=spec.get("url"),
                 kind=spec.get("kind", "news"),
+                logo_url=spec.get("logo_url"),
             )
         feeds = raw.get("feeds", {}) if isinstance(raw.get("feeds"), dict) else {}
         seeds = raw.get("seeds", []) if isinstance(raw.get("seeds"), list) else []
@@ -59,6 +61,7 @@ class SourceRegistry:
                 "base_trust": s.base_trust,
                 "url": s.url,
                 "kind": s.kind,
+                "logo_url": s.logo_url,
             }
             for sid, s in self.sources.items()
         }

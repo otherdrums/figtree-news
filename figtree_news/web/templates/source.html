@@ -3,7 +3,12 @@
 {% block content %}
 <div class="container">
   <section>
-    <h2>Source: {{ sid }}</h2>
+    <h2>
+      {% if source_logos.get(sid) %}
+      <img src="{{ source_logos[sid] }}" class="source-logo-inline" alt="" style="height:32px;vertical-align:middle;margin-right:0.5rem" onerror="this.style.display='none'">
+      {% endif %}
+      Source: {{ sid }}
+    </h2>
     {% if info %}
       <p class="meta">
         Adjusted trust {{ "%.2f"|format(info.adjusted_trust) }}
@@ -19,7 +24,13 @@
     <ul class="articles">
       {% for a in articles %}
         <li>
+          {% if a.meta.get('image_url') %}
+          <div class="feed-thumb" style="margin-bottom:0.5rem">
+            <img src="{{ a.meta.get('image_url') }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
+          </div>
+          {% endif %}
           <a href="/article/{{ a.figment_id }}">{{ a.meta.get("title") or a.text[:80] }}</a>
+          {% if a.meta.get("author") %} <span class="meta">by {{ a.meta.get("author") }}</span>{% endif %}
           {% if a.meta.get("url") %}&middot; <a href="{{ a.meta.get('url') }}">source</a>{% endif %}
         </li>
       {% endfor %}

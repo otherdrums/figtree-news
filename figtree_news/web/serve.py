@@ -311,6 +311,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     registry = SourceRegistry.load(sources)
     store: FigmentStore = connect(db)
     search_idx = get_index(db.replace(".lance", "_fts.db"))
+    source_logos = {s.source_id: s.logo_url for s in registry.all() if s.logo_url}
 
     app.state.store = store
     app.state.registry = registry
@@ -337,6 +338,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
                 "narratives": d["narratives"],
                 "agenda": d["agenda"],
                 "by_id": d["by_id"],
+                "source_logos": source_logos,
                 "articles": sorted(
                     d["articles"],
                     key=lambda f: f.meta.get("first_seen", ""),
@@ -354,7 +356,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         related = [n for n in d["narratives"] if fid in n.get("members", [])]
         return _render(request,
             "article.html",
-            {"request": request, "article": f, "related": related, "agenda": d["agenda"]},
+            {"request": request, "article": f, "related": related, "agenda": d["agenda"], "source_logos": source_logos},
         )
 
     @app.get("/source/{sid}")
@@ -371,6 +373,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
                 "articles": src_articles,
                 "narratives": src_narratives,
                 "info": info,
+                "source_logos": source_logos,
             },
         )
 
@@ -383,7 +386,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         members = [d["by_id"].get(m) for m in n.get("members", []) if m in d["by_id"]]
         return _render(request,
             "narrative.html",
-            {"request": request, "narrative": n, "members": members, "agenda": d["agenda"]},
+            {"request": request, "narrative": n, "members": members, "agenda": d["agenda"], "source_logos": source_logos},
         )
 
     @app.get("/lineage")
@@ -391,7 +394,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         d = data()
         return _render(request,
             "lineage.html",
-            {"request": request, "derivatives": d["derivatives"], "narratives": d["narratives"]},
+            {"request": request, "derivatives": d["derivatives"], "narratives": d["narratives"], "source_logos": source_logos},
         )
 
     # ---- JSON API -------------------------------------------------------- #
@@ -583,7 +586,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
 
     @app.get("/search")
     def search_page(request: Request):
-        return _render(request, "search.html", {"request": request})
+        return _render(request, "search.html", {"request": request, "source_logos": source_logos})
 
     # ---- WebSocket for live updates ------------------------------------- #
     @app.websocket("/ws")
