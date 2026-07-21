@@ -11,13 +11,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
 import sys
 import time
+import warnings
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+
+warnings.filterwarnings("ignore", message=".*_check_is_size.*")
+warnings.filterwarnings("ignore", category=FutureWarning, module="bitsandbytes")
+logging.getLogger("transformers").setLevel(logging.ERROR)
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -155,6 +161,7 @@ async def _run_crawl_tick(
         # Run model loading in a thread so the event loop stays responsive
         model, tokenizer = await asyncio.to_thread(load_model, model_id)
         _gen_cache["gen"] = FigmentGenerator(model, tokenizer)
+        print(f"[crawl] model loaded ({model_id.rsplit('/',1)[-1]})")
 
         store: FigmentStore = connect(db)
         registry = SourceRegistry.load(sources_path)
@@ -162,6 +169,7 @@ async def _run_crawl_tick(
         kv_manager = None
         if compute_kv:
             kv_manager = KVCacheManager(model, tokenizer, kv_root="./figtree_kv", mode="eager")
+            print("[crawl] KV cache manager created (mode=eager)")
 
         crawler = Crawler(
             model, tokenizer, store, registry,
@@ -192,6 +200,7 @@ async def _run_crawl_tick(
             added = await asyncio.to_thread(
                 crawler.crawl_feed, sid, uri, min(per_feed, budget)
             )
+            print(f"[crawl] {sid}: +{added} articles")
             stats["feeds_added"] += added
             stats["sources"].add(sid)
             budget -= added
@@ -221,18 +230,23 @@ async def _run_crawl_tick(
 
         stats["sources"] = sorted(stats["sources"])
         stats.update(pipe_stats)
+        n_narr = pipe_stats.get("narratives", [])
+        n_narr = len(n_narr) if isinstance(n_narr, list) else n_narr
+        print(f"[crawl] pipeline done — {n_narr} narratives, {pipe_stats.get('edges','')} edges")
         _crawl_state["stats"] = stats
         _crawl_state["running"] = False
         _crawl_state["current_step"] = "done"
         _crawl_state["message"] = f"Done: {stats.get('feeds_added',0)} new articles, {stats.get('narratives',0)} narratives"
         _data_cache["data"] = None
         _warm_cache(store)
+        print(f"[crawl] tick complete — {stats.get('feeds_added',0)} new articles, {n_narr} narratives")
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
     except Exception as exc:
         _crawl_state["running"] = False
         _crawl_state["current_step"] = "error"
         _crawl_state["message"] = f"Error: {exc}"
+        print(f"[crawl] ERROR: {exc}")
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
         raise
 
@@ -252,10 +266,14 @@ async def _run_continuous_crawl(
     global _crawl_state
     _crawl_state["continuous"] = True
     _crawl_state["stop_requested"] = False
+    tick_num = 0
+    print(f"[crawl] continuous mode started (interval={interval}s, feeds={len(feeds)})")
 
     while not _crawl_state.get("stop_requested"):
         if _crawl_state.get("stop_requested"):
             break
+        tick_num += 1
+        print(f"[crawl] tick #{tick_num} starting")
         try:
             await _run_crawl_tick(
                 db, sources_path, feeds, seeds, max_articles, summarize, compute_kv, model_id
@@ -282,6 +300,7 @@ async def _run_continuous_crawl(
     _crawl_state["running"] = False
     _crawl_state["current_step"] = "idle"
     _crawl_state["message"] = "Continuous crawl stopped"
+    print(f"[crawl] stopped after {tick_num} ticks")
     await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
 
@@ -539,8 +558,9 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     async def websocket_endpoint(websocket: WebSocket):
         await websocket.accept()
         _ws_connections.append(websocket)
-        # Send initial state + stats
-        await websocket.send_text(json.dumps({"type": "crawl_status", "data": _crawl_state}))
+        # Send initial state + stats (strip non-JSON fields)
+        state = {k: v for k, v in _crawl_state.items() if k != "task"}
+        await websocket.send_text(json.dumps({"type": "crawl_status", "data": state}))
         await websocket.send_text(json.dumps({"type": "stats", "data": _get_stats(store)}))
         try:
             while True:
