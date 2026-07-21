@@ -1,39 +1,43 @@
 {% extends "base.html" %}
 {% block title %}Narrative &middot; figtree-news{% endblock %}
 {% block content %}
-<h2>Narrative</h2>
-<p class="meta">Entities: {{ narrative.entities | join(", ") }}</p>
-<p>{{ narrative.text }}</p>
+<div class="container">
+  <section>
+    <h2>Narrative</h2>
+    <p class="meta">Entities: {{ narrative.entities | join(", ") }}</p>
+    <p>{{ narrative.text }}</p>
 
-<section>
-  <h3>First reporter</h3>
-  <p>
-    <a href="/source/{{ narrative.first_reporter }}">{{ narrative.first_reporter }}</a>
-    {% if narrative.first_reporter_url %}
-      &middot; <a href="{{ narrative.first_reporter_url }}">original article</a>
-    {% endif %}
-  </p>
-</section>
+    <section>
+      <h3>First reporter</h3>
+      <p>
+        <a href="/source/{{ narrative.first_reporter }}">{{ narrative.first_reporter }}</a>
+        {% if narrative.first_reporter_url %}
+          &middot; <a href="{{ narrative.first_reporter_url }}">original article</a>
+        {% endif %}
+      </p>
+    </section>
 
-<section>
-  <h3>Outlets covering this story</h3>
-  <ul>
-    {% for s in narrative.sources %}
-      <li><a href="/source/{{ s }}">{{ s }}</a>{% if s == narrative.first_reporter %} <span class="tag">first</span>{% endif %}</li>
-    {% endfor %}
-  </ul>
-</section>
+    <section>
+      <h3>Outlets covering this story</h3>
+      <ul class="stories">
+        {% for s in narrative.sources %}
+          <li><a href="/source/{{ s }}">{{ s }}</a>{% if s == narrative.first_reporter %} <span class="tag">first</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+    </section>
 
-<section>
-  <h3>Articles</h3>
-  <ul class="articles">
-    {% for m in members %}
-      <li>
-        <a href="/article/{{ m.figment_id }}">{{ m.meta.get("title") or m.text[:80] }}</a>
-        <span class="meta"><a href="/source/{{ m.meta.get('source_id') }}">{{ m.meta.get('source_id') }}</a></span>
-        {% if m.meta.get("url") %}&middot; <a href="{{ m.meta.get('url') }}">source</a>{% endif %}
-      </li>
-    {% endfor %}
-  </ul>
-</section>
+    <section>
+      <h3>Articles</h3>
+      <ul class="articles">
+        {% for m in members %}
+          <li>
+            <a href="/article/{{ m.figment_id }}">{{ m.meta.get("title") or m.text[:80] }}</a>
+            <span class="meta"><a href="/source/{{ m.meta.get('source_id') }}">{{ m.meta.get('source_id') }}</a></span>
+            {% if m.meta.get("url") %}&middot; <a href="{{ m.meta.get('url') }}">source</a>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  </section>
+</div>
 {% endblock %}

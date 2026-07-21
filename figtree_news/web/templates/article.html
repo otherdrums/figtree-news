@@ -1,32 +1,36 @@
 {% extends "base.html" %}
 {% block title %}Article &middot; figtree-news{% endblock %}
 {% block content %}
-<article class="article">
-  <h2>{{ article.meta.get("title") or article.text[:120] }}</h2>
-  <p class="meta">
-    Source: <a href="/source/{{ article.meta.get('source_id') }}">{{ article.meta.get("source_id") }}</a>
-    {% if article.meta.get("url") %}&middot; <a href="{{ article.meta.get('url') }}">Original article</a>{% endif %}
-    {% if article.meta.get("published") %}&middot; {{ article.meta.get("published") }}{% endif %}
-  </p>
-  {% if article.meta.get("summary") %}
-    <p class="summary">{{ article.meta.get("summary") }}</p>
-  {% endif %}
-  <div class="body">{{ article.text }}</div>
+<section class="content">
+  <div class="container">
+    <article class="article">
+      <h2>{{ article.meta.get("title") or article.text[:120] }}</h2>
+      <p class="meta">
+        Source: <a href="/source/{{ article.meta.get('source_id') }}">{{ article.meta.get("source_id") }}</a>
+        {% if article.meta.get("url") %}&middot; <a href="{{ article.meta.get('url') }}">Original article</a>{% endif %}
+        {% if article.meta.get("published") %}&middot; {{ article.meta.get("published") }}{% endif %}
+      </p>
+      {% if article.meta.get("summary") %}
+        <p class="summary">{{ article.meta.get("summary") }}</p>
+      {% endif %}
+      <div class="body">{{ article.text }}</div>
 
-  {% if article.meta.get("first_reporter") %}
-    <p class="tag">Broke this story first.</p>
-  {% endif %}
-  {% if article.meta.get("derivative_of") %}
-    <p class="tag">Derivative of <a href="/article/{{ article.meta.get('derivative_of') }}">an earlier report</a>.</p>
-  {% endif %}
+      {% if article.meta.get("first_reporter") %}
+        <p class="tag">Broke this story first.</p>
+      {% endif %}
+      {% if article.meta.get("derivative_of") %}
+        <p class="tag">Derivative of <a href="/article/{{ article.meta.get('derivative_of') }}">an earlier report</a>.</p>
+      {% endif %}
 
-  {% if related %}
-    <h3>Related narratives</h3>
-    <ul>
-      {% for n in related %}
-        <li><a href="/narrative/{{ n.narrative_id }}">{{ n.entities[:6] | join(", ") or n.text[:80] }}</a></li>
-      {% endfor %}
-    </ul>
-  {% endif %}
-</article>
+      {% if related %}
+        <h3>Related narratives</h3>
+        <ul class="stories">
+          {% for n in related %}
+            <li><a href="/narrative/{{ n.narrative_id }}">{{ n.entities[:6] | join(", ") or n.text[:80] }}</a></li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </article>
+  </div>
+</section>
 {% endblock %}
