@@ -21,9 +21,10 @@ def run_pipeline(
     store: FigmentStore,
     do_summaries: bool = True,
     do_brief: bool = True,
+    max_stories: int = 0,
 ) -> dict[str, Any]:
     trust_out = trust_mod.update_trust(store)
-    lineage_out = lineage_mod.compute_lineage(store)
+    lineage_out = lineage_mod.compute_lineage(store, max_stories=max_stories)
     summaries = {"summarized": 0}
     brief = {"used": 0, "brief": ""}
     if do_summaries:

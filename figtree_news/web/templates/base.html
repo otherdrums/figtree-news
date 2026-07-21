@@ -86,6 +86,9 @@
   <div id="new-articles-banner" class="new-banner" style="display:none;">
     <span>New articles available</span>
     <button class="btn btn-sm btn-primary" onclick="location.reload()">Refresh</button>
+    <label class="banner-auto-label">
+      <input type="checkbox" id="auto-refresh" checked onchange="toggleAutoRefresh()"> Auto-refresh
+    </label>
     <button class="btn btn-sm" onclick="this.parentElement.style.display='none'">Dismiss</button>
   </div>
 
@@ -123,6 +126,10 @@
     setInterval(updateClock, 1000); updateClock();
 
     // Stats polling
+    let _autoRefreshEnabled = true;
+    function toggleAutoRefresh() {
+      _autoRefreshEnabled = document.getElementById('auto-refresh').checked;
+    }
     async function updateStats() {
       try {
         const resp = await fetch('/api/stats');

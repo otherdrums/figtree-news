@@ -147,6 +147,9 @@ async def _run_crawl_tick(
     summarize: bool,
     compute_kv: bool,
     model_id: str,
+    max_stories: int = 0,
+    since: str = "",
+    before: str = "",
 ):
     """Single crawl tick. Heavy (model) work runs in threads so the event loop stays free."""
     global _crawl_state
@@ -199,12 +202,22 @@ async def _run_crawl_tick(
 
             # Run feed crawl in thread so loop stays free
             added = await asyncio.to_thread(
-                crawler.crawl_feed, sid, uri, min(per_feed, budget)
+                crawler.crawl_feed, sid, uri, min(per_feed, budget),
+                since=since, before=before,
             )
             print(f"[crawl] {sid}: +{added} articles")
             stats["feeds_added"] += added
             stats["sources"].add(sid)
             budget -= added
+
+            # Broadcast content update so the page can refresh live
+            if added > 0:
+                _data_cache["data"] = None
+                _warm_cache(store)
+                await _broadcast({"type": "content_update", "data": {
+                    "source": sid, "added": added,
+                    "total_articles": search_idx.article_count(),
+                }})
 
         if seeds and budget > 0:
             _crawl_state["current_step"] = "crawling_seeds"
@@ -224,7 +237,7 @@ async def _run_crawl_tick(
         # Run pipeline in thread
         pipe_stats = await asyncio.to_thread(
             run_pipeline, model, tokenizer, store,
-            do_summaries=summarize, do_brief=True,
+            do_summaries=summarize, do_brief=True, max_stories=max_stories,
         )
         _crawl_state["progress"] = 4
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
@@ -262,6 +275,9 @@ async def _run_continuous_crawl(
     compute_kv: bool,
     model_id: str,
     interval: int,
+    max_stories: int = 0,
+    since: str = "",
+    before: str = "",
 ):
     """Loop crawl ticks until stop_requested."""
     global _crawl_state
@@ -277,7 +293,8 @@ async def _run_continuous_crawl(
         print(f"[crawl] tick #{tick_num} starting")
         try:
             await _run_crawl_tick(
-                db, sources_path, feeds, seeds, max_articles, summarize, compute_kv, model_id
+                db, sources_path, feeds, seeds, max_articles, summarize, compute_kv, model_id,
+                max_stories=max_stories, since=since, before=before,
             )
         except Exception as exc:
             _crawl_state["message"] = f"Tick failed: {exc}; retrying in {interval}s"
@@ -286,16 +303,22 @@ async def _run_continuous_crawl(
         if _crawl_state.get("stop_requested"):
             break
 
-        _crawl_state["current_step"] = "sleeping"
-        _crawl_state["message"] = f"Sleeping {interval}s until next tick..."
-        _crawl_state["running"] = False
-        await _broadcast({"type": "crawl_status", "data": _crawl_state})
+        if interval > 0:
+            _crawl_state["current_step"] = "sleeping"
+            _crawl_state["message"] = f"Sleeping {interval}s until next tick..."
+            _crawl_state["running"] = False
+            await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
-        # Sleep in small chunks so we can respond to stop quickly
-        for _ in range(interval):
-            if _crawl_state.get("stop_requested"):
-                break
-            await asyncio.sleep(1)
+            # Sleep in small chunks so we can respond to stop quickly
+            for _ in range(interval):
+                if _crawl_state.get("stop_requested"):
+                    break
+                await asyncio.sleep(1)
+        else:
+            _crawl_state["current_step"] = "next_tick"
+            _crawl_state["message"] = "Starting next tick immediately..."
+            _crawl_state["running"] = False
+            await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
     _crawl_state["continuous"] = False
     _crawl_state["running"] = False
@@ -461,6 +484,9 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         model_id = body.get("model_id", "unsloth/Qwen3-4B-bnb-4bit")
         continuous = body.get("continuous", False)
         interval = body.get("interval", 3600)
+        max_stories = body.get("max_stories", 0)
+        since = body.get("since", "")
+        before = body.get("before", "")
 
         # Load feeds/seeds from sources.json if not provided
         if not feeds and not seeds:
@@ -485,13 +511,15 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         if continuous:
             task = asyncio.create_task(
                 _run_continuous_crawl(
-                    db, sources, feeds, seeds, max_articles, summarize, compute_kv, model_id, interval
+                    db, sources, feeds, seeds, max_articles, summarize, compute_kv, model_id, interval,
+                    max_stories=max_stories, since=since, before=before,
                 )
             )
         else:
             task = asyncio.create_task(
                 _run_crawl_tick(
-                    db, sources, feeds, seeds, max_articles, summarize, compute_kv, model_id
+                    db, sources, feeds, seeds, max_articles, summarize, compute_kv, model_id,
+                    max_stories=max_stories, since=since, before=before,
                 )
             )
         _crawl_state["task"] = task
@@ -518,10 +546,12 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
             return {"error": f"Bad JSON: {e}"}
         do_summaries = body.get("summarize", True)
         do_brief = body.get("brief", True)
+        max_stories = body.get("max_stories", 0)
         try:
             model, tokenizer = await asyncio.to_thread(load_model, "unsloth/Qwen3-4B-bnb-4bit")
             stats = await asyncio.to_thread(
-                run_pipeline, model, tokenizer, store, do_summaries=do_summaries, do_brief=do_brief
+                run_pipeline, model, tokenizer, store,
+                do_summaries=do_summaries, do_brief=do_brief, max_stories=max_stories,
             )
             _data_cache["data"] = None
             _warm_cache(store)

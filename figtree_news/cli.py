@@ -111,11 +111,14 @@ def crawl_cmd(
     seed: list[str] = typer.Option([], "--seed", help="seed URL (repeatable)"),
     loop: bool = typer.Option(True, "--loop", help="Run continuously (default)"),
     once: bool = typer.Option(False, "--once", help="Run a single tick and exit"),
-    interval: int = typer.Option(3600, "--interval", help="Seconds between ticks"),
+    interval: int = typer.Option(0, "--interval", help="Seconds between ticks (0 = no pause)"),
     max_depth: int = typer.Option(1, "--max-depth"),
     max_pages: int = typer.Option(50, "--max-pages"),
     seen_path: str = typer.Option("./seen_urls.json"),
     max_articles: int = typer.Option(40, "--max-articles", help="Cap articles ingested per run"),
+    max_stories: int = typer.Option(0, "--max-stories", help="Cap narratives generated (0 = unlimited)"),
+    since: str = typer.Option("", "--since", help="Only ingest articles published after this date (YYYY-MM-DD)"),
+    before: str = typer.Option("", "--before", help="Only ingest articles published before this date (YYYY-MM-DD)"),
     backfill: bool = typer.Option(False, "--backfill", help="Deep initial crawl (max_articles=200) for empty stores"),
     model_id: str = typer.Option("unsloth/Qwen3-4B-bnb-4bit"),
     compute_kv: bool = False,
@@ -145,9 +148,10 @@ def crawl_cmd(
     )
 
     def tick():
-        s = crawler.run_once(feeds, seeds, max_articles=max_articles)
+        s = crawler.run_once(feeds, seeds, max_articles=max_articles, since=since, before=before)
         p = pipeline_mod.run_pipeline(
-            model, tokenizer, store, do_summaries=not no_summaries, do_brief=True
+            model, tokenizer, store, do_summaries=not no_summaries, do_brief=True,
+            max_stories=max_stories,
         )
         typer.echo(json.dumps({"crawl": s, "pipeline": p}, indent=2))
 

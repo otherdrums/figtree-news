@@ -114,8 +114,11 @@ def _cluster(articles: list[Figment]) -> list[list[Figment]]:
     return [g for g in groups.values() if len(g) >= 2]
 
 
-def compute_lineage(store: FigmentStore) -> dict[str, Any]:
-    """Recompute lineage figments from the current store. Idempotent."""
+def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]:
+    """Recompute lineage figments from the current store. Idempotent.
+    
+    max_stories: if > 0, keep only the top N narratives by member count.
+    """
     all_figs = store.all()
     # Purge old narrative/derivative figments so stale clusters don't linger.
     for f in all_figs:
@@ -126,6 +129,11 @@ def compute_lineage(store: FigmentStore) -> dict[str, Any]:
     clusters = _cluster(articles)
     figments: list[Figment] = []
     summaries: list[dict[str, Any]] = []
+
+    # Sort clusters by size (largest first) so max_stories keeps the most-covered stories
+    clusters.sort(key=lambda g: len(g), reverse=True)
+    if max_stories > 0:
+        clusters = clusters[:max_stories]
 
     for group in clusters:
         group = sorted(group, key=lambda f: _parse_time(f) or datetime.max.replace(tzinfo=timezone.utc))

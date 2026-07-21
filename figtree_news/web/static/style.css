@@ -952,6 +952,19 @@ code {
   to { transform: translateY(0); opacity: 1; }
 }
 
+.banner-auto-label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--light-bg);
+  cursor: pointer;
+}
+
+.banner-auto-label input[type="checkbox"] {
+  accent-color: var(--light-bg);
+}
+
 /* ===== Control Panel (inside modal) ===== */
 .control-grid {
   display: grid;

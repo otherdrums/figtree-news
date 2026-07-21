@@ -27,12 +27,14 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _read_feed(uri: str, source_id: str) -> list[dict[str, Any]]:
+def _read_feed(uri: str, source_id: str, since: str = "", before: str = "") -> list[dict[str, Any]]:
     """Parse an RSS/Atom feed (URL or local file) into article dicts.
 
     Requires ``feedparser`` (optional dependency). Falls back to parsing the
     URI as a JSON/JSONL file of article dicts if feedparser is unavailable or
     the content is not a feed.
+
+    since/before: ISO date strings or RFC 2822 dates to filter articles by published date.
     """
     try:
         import feedparser  # type: ignore
@@ -43,6 +45,11 @@ def _read_feed(uri: str, source_id: str) -> list[dict[str, Any]]:
 
     parsed = feedparser.parse(uri)
     articles: list[dict[str, Any]] = []
+
+    # Parse since/before into comparable datetimes
+    _since = _parse_date_param(since) if since else None
+    _before = _parse_date_param(before) if before else None
+
     for entry in getattr(parsed, "entries", []):
         summary = entry.get("summary") or ""
         content = entry.get("content")
@@ -58,6 +65,16 @@ def _read_feed(uri: str, source_id: str) -> list[dict[str, Any]]:
         if not text.strip():
             continue
 
+        # Date range filtering
+        pub_raw = entry.get("published") or ""
+        if (_since or _before) and pub_raw:
+            pub_dt = _parse_date_param(pub_raw)
+            if pub_dt:
+                if _since and pub_dt < _since:
+                    continue
+                if _before and pub_dt > _before:
+                    continue
+
         # Extract article image from feed metadata
         image_url = _extract_feed_image(entry)
         video_url = _extract_video_url(entry)
@@ -69,12 +86,33 @@ def _read_feed(uri: str, source_id: str) -> list[dict[str, Any]]:
                 "url": entry.get("link"),
                 "title": entry.get("title"),
                 "author": entry.get("author"),
-                "published": entry.get("published"),
+                "published": pub_raw,
                 "image_url": image_url,
                 "video_url": video_url,
             }
         )
     return articles
+
+
+def _parse_date_param(s: str) -> datetime | None:
+    """Parse a date string (ISO or RFC 2822) into a timezone-aware datetime."""
+    from email.utils import parsedate_to_datetime
+    if not s:
+        return None
+    try:
+        dt = parsedate_to_datetime(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        pass
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
 
 
 def _extract_feed_image(entry) -> str | None:
@@ -232,10 +270,12 @@ def ingest_feed(
     registry: SourceRegistry,
     source_id: str,
     uri: str,
+    since: str = "",
+    before: str = "",
     **kwargs,
 ) -> dict[str, Any]:
     """Fetch a feed and ingest every entry as an article."""
-    articles = _read_feed(uri, source_id)
+    articles = _read_feed(uri, source_id, since=since, before=before)
     return ingest_articles(model, tokenizer, store, registry, articles, **kwargs)
 
 

@@ -187,7 +187,19 @@
     <h3>Crawl Settings</h3>
     <div class="form-group">
       <label for="max-articles">Max articles per run</label>
-      <input type="number" id="max-articles" value="40" min="1" max="200">
+      <input type="number" id="max-articles" value="40" min="1" max="500">
+    </div>
+    <div class="form-group">
+      <label for="max-stories">Max stories (0 = unlimited)</label>
+      <input type="number" id="max-stories" value="0" min="0" max="100">
+    </div>
+    <div class="form-group">
+      <label for="since">Since (date range start)</label>
+      <input type="date" id="since" value="">
+    </div>
+    <div class="form-group">
+      <label for="before">Before (date range end)</label>
+      <input type="date" id="before" value="">
     </div>
     <div class="form-group">
       <label title="Cache K/V vectors for instant article recall (uses more disk)">
@@ -200,8 +212,8 @@
       </label>
     </div>
     <div class="form-group">
-      <label for="interval">Interval (seconds)</label>
-      <input type="number" id="interval" value="3600" min="60">
+      <label for="interval">Pause between ticks (seconds, 0 = no pause)</label>
+      <input type="number" id="interval" value="0" min="0">
     </div>
   </div>
 
@@ -245,11 +257,39 @@ function connectWS() {
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'crawl_status') updateCrawlUI(msg.data);
+    if (msg.type === 'content_update') refreshContent();
   };
   ws.onclose = () => setTimeout(connectWS, 2000);
   ws.onerror = () => ws.close();
 }
 connectWS();
+
+let _contentRefreshTimer = null;
+let _lastArticleCount = 0;
+// Initialize count from stats bar on load
+fetch('/api/stats').then(r => r.json()).then(s => { _lastArticleCount = s.articles || 0; }).catch(() => {});
+function refreshContent() {
+  // Debounce: batch rapid updates into a single refresh
+  if (_contentRefreshTimer) clearTimeout(_contentRefreshTimer);
+  _contentRefreshTimer = setTimeout(async () => {
+    try {
+      const resp = await fetch('/api/stats');
+      const s = await resp.json();
+      const newCount = s.articles || 0;
+      if (newCount > _lastArticleCount) {
+        if (_autoRefreshEnabled) {
+          location.reload();
+        } else {
+          const banner = document.getElementById('new-articles-banner');
+          banner.querySelector('span').textContent = `${newCount - _lastArticleCount} new articles`;
+          banner.style.display = 'flex';
+        }
+      }
+      _lastArticleCount = newCount;
+      updateStats();
+    } catch (e) {}
+  }, 2000);
+}
 
 function updateCrawlUI(state) {
   crawlRunning = state.running || state.continuous;
@@ -268,6 +308,9 @@ function updateCrawlUI(state) {
   } else if (state.current_step === 'sleeping') {
     crawlStat.textContent = 'Sleeping';
     crawlStat.style.color = '#FFC107';
+  } else if (state.current_step === 'next_tick') {
+    crawlStat.textContent = 'Next tick...';
+    crawlStat.style.color = '#A6F0FF';
   } else if (state.running) {
     crawlStat.textContent = state.current_step;
     crawlStat.style.color = '#A6F0FF';
@@ -279,7 +322,8 @@ function updateCrawlUI(state) {
   const isDone = state.current_step === 'done';
   const isError = state.current_step === 'error';
   const isSleeping = state.current_step === 'sleeping';
-  const showPanel = state.running || isSleeping || isError || (!isDone && state.current_step !== 'idle');
+  const isNextTick = state.current_step === 'next_tick';
+  const showPanel = state.running || isSleeping || isNextTick || isError || (!isDone && state.current_step !== 'idle');
   document.getElementById('progress-panel').style.display = showPanel ? 'block' : 'none';
 
   const stepEl = document.getElementById('progress-step');
@@ -318,6 +362,9 @@ async function runCrawl(continuous) {
   const body = {
     feeds, seeds,
     max_articles: parseInt(document.getElementById('max-articles').value),
+    max_stories: parseInt(document.getElementById('max-stories').value) || 0,
+    since: document.getElementById('since').value || '',
+    before: document.getElementById('before').value || '',
     summarize: document.getElementById('summarize').checked,
     continuous: continuous,
     interval: parseInt(document.getElementById('interval').value),

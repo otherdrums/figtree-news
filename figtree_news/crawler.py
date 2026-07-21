@@ -219,8 +219,9 @@ class Crawler:
             self._mark(url)
         return True
 
-    def crawl_feed(self, source_id: str, feed_uri: str, max_articles: int | None = None) -> int:
-        articles = _read_feed(feed_uri, source_id)
+    def crawl_feed(self, source_id: str, feed_uri: str, max_articles: int | None = None,
+                   since: str = "", before: str = "") -> int:
+        articles = _read_feed(feed_uri, source_id, since=since, before=before)
         added = 0
         for art in articles:
             if max_articles is not None and added >= max_articles:
@@ -268,7 +269,8 @@ class Crawler:
 
     # -- orchestration ----------------------------------------------------- #
     def run_once(
-        self, feeds: dict[str, str], seeds: list[str], max_articles: int | None = None
+        self, feeds: dict[str, str], seeds: list[str], max_articles: int | None = None,
+        since: str = "", before: str = "",
     ) -> dict:
         stats = {"feeds_added": 0, "seeds_added": 0, "sources": set()}
         # Spread the budget across feeds so no single source dominates a run.
@@ -279,7 +281,7 @@ class Crawler:
         for sid, uri in feeds.items():
             if budget is not None and budget <= 0:
                 break
-            got = self.crawl_feed(sid, uri, max_articles=per)
+            got = self.crawl_feed(sid, uri, max_articles=per, since=since, before=before)
             stats["feeds_added"] += got
             if budget is not None:
                 budget -= got
