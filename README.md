@@ -139,6 +139,26 @@ figtree_news/
 
 `sources.json` is a map of `source_id -> {name, base_trust, url, kind, logo_url}`.
 
+The demo config ships with 11 news/RSS sources and 8 YouTube video sources:
+
+| Source | ID | Kind | Trust |
+|--------|----|------|-------|
+| BBC News | `bbc` | news | 0.9 |
+| Al Jazeera | `aljazeera` | news | 0.85 |
+| NPR | `npr` | news | 0.9 |
+| The Guardian | `guardian` | news | 0.85 |
+| Reuters | `reuters` | news | 0.9 |
+| DW News (RSS) | `dw` | news | 0.85 |
+| France 24 English (RSS) | `france24` | news | 0.85 |
+| Fox News | `foxnews` | video | 0.8 |
+| CNN | `cnn` | video | 0.8 |
+| MSNBC | `msnbc` | video | 0.8 |
+| CBS News | `cbsnews` | video | 0.8 |
+| Associated Press | `ap` | video | 0.9 |
+| DW News (YT) | `dwnews_yt` | video | 0.85 |
+| France 24 (YT) | `france24_yt` | video | 0.85 |
+| PBS NewsHour | `pbsnewshour` | video | 0.9 |
+
 ```json
 {
   "bbc": {
@@ -148,17 +168,38 @@ figtree_news/
     "kind": "news",
     "logo_url": "https://www.google.com/s2/favicons?domain=bbc.com&sz=64"
   },
-  "my_youtube": {
-    "name": "Some YouTube Channel",
-    "base_trust": 0.7,
+  "foxnews": {
+    "name": "Fox News",
+    "base_trust": 0.8,
+    "url": "https://www.foxnews.com/",
     "kind": "video",
-    "logo_url": "https://www.google.com/s2/favicons?domain=youtube.com&sz=64"
+    "logo_url": "https://www.google.com/s2/favicons?domain=foxnews.com&sz=64"
   },
   "feeds": {
     "bbc": "http://feeds.bbci.co.uk/news/rss.xml",
-    "my_youtube": "https://www.youtube.com/feeds/videos.xml?channel_id=UC_xxx"
+    "reuters": "https://www.reuters.com/world/rss",
+    "foxnews": "https://www.youtube.com/feeds/videos.xml?channel_id=UCXIJgqnII2ZOINSWNOGFThA"
   },
   "seeds": []
+}
+```
+
+### Rumble
+
+Rumble blocks direct scraping via Cloudflare, so its feeds cannot be added
+straight to `sources.json`. To use Rumble sources, run a self-hosted RSS proxy:
+
+| Project | Stack | Usage |
+|---------|-------|-------|
+| [mmoyles87/rumble-rss-proxy](https://github.com/mmoyles87/rumble-rss-proxy) | Express.js, Docker | `GET /:channel` → RSS |
+| [porjo/rumblerss](https://github.com/porjo/rumblerss) | Go, Docker | `GET /:channel` → RSS |
+| [RSS-Bridge](https://github.com/RSS-Bridge/rss-bridge) | PHP | `RumbleBridge` — public instance at `rss-bridge.org` |
+
+Once the proxy is running, point a feed entry at it:
+
+```json
+"feeds": {
+  "rumble_channel": "http://localhost:3000/channelname"
 }
 ```
 

@@ -1,5 +1,5 @@
 {
-  "bbc":      {
+  "bbc": {
     "name": "BBC News",
     "base_trust": 0.9,
     "url": "https://www.bbc.com/news",
@@ -13,7 +13,7 @@
     "kind": "news",
     "logo_url": "https://www.google.com/s2/favicons?domain=aljazeera.com&sz=64"
   },
-  "npr":      {
+  "npr": {
     "name": "NPR",
     "base_trust": 0.9,
     "url": "https://www.npr.org/",
@@ -27,12 +27,101 @@
     "kind": "news",
     "logo_url": "https://www.google.com/s2/favicons?domain=theguardian.com&sz=64"
   },
+  "reuters": {
+    "name": "Reuters",
+    "base_trust": 0.9,
+    "url": "https://www.reuters.com/",
+    "kind": "news",
+    "logo_url": "https://www.google.com/s2/favicons?domain=reuters.com&sz=64"
+  },
+  "dw": {
+    "name": "DW News",
+    "base_trust": 0.85,
+    "url": "https://www.dw.com/",
+    "kind": "news",
+    "logo_url": "https://www.google.com/s2/favicons?domain=dw.com&sz=64"
+  },
+  "france24": {
+    "name": "France 24 English",
+    "base_trust": 0.85,
+    "url": "https://www.france24.com/en/",
+    "kind": "news",
+    "logo_url": "https://www.google.com/s2/favicons?domain=france24.com&sz=64"
+  },
+
+  "foxnews": {
+    "name": "Fox News",
+    "base_trust": 0.8,
+    "url": "https://www.foxnews.com/",
+    "kind": "video",
+    "logo_url": "https://www.google.com/s2/favicons?domain=foxnews.com&sz=64"
+  },
+  "cnn": {
+    "name": "CNN",
+    "base_trust": 0.8,
+    "url": "https://www.cnn.com/",
+    "kind": "video",
+    "logo_url": "https://www.google.com/s2/favicons?domain=cnn.com&sz=64"
+  },
+  "msnbc": {
+    "name": "MSNBC",
+    "base_trust": 0.8,
+    "url": "https://www.msnbc.com/",
+    "kind": "video",
+    "logo_url": "https://www.google.com/s2/favicons?domain=msnbc.com&sz=64"
+  },
+  "cbsnews": {
+    "name": "CBS News",
+    "base_trust": 0.8,
+    "url": "https://www.cbsnews.com/",
+    "kind": "video",
+    "logo_url": "https://www.google.com/s2/favicons?domain=cbsnews.com&sz=64"
+  },
+  "ap": {
+    "name": "Associated Press",
+    "base_trust": 0.9,
+    "url": "https://apnews.com/",
+    "kind": "video",
+    "logo_url": "https://www.google.com/s2/favicons?domain=apnews.com&sz=64"
+  },
+  "dwnews_yt": {
+    "name": "DW News",
+    "base_trust": 0.85,
+    "url": "https://www.youtube.com/@dwnews",
+    "kind": "video",
+    "logo_url": "https://www.google.com/s2/favicons?domain=youtube.com&sz=64"
+  },
+  "france24_yt": {
+    "name": "France 24 English",
+    "base_trust": 0.85,
+    "url": "https://www.youtube.com/@FRANCE24English",
+    "kind": "video",
+    "logo_url": "https://www.google.com/s2/favicons?domain=youtube.com&sz=64"
+  },
+  "pbsnewshour": {
+    "name": "PBS NewsHour",
+    "base_trust": 0.9,
+    "url": "https://www.pbs.org/newshour/",
+    "kind": "video",
+    "logo_url": "https://www.google.com/s2/favicons?domain=pbs.org&sz=64"
+  },
 
   "feeds": {
     "bbc": "http://feeds.bbci.co.uk/news/rss.xml",
     "aljazeera": "https://www.aljazeera.com/xml/rss/all.xml",
     "npr": "https://feeds.npr.org/1001/rss.xml",
-    "guardian": "https://www.theguardian.com/world/rss"
+    "guardian": "https://www.theguardian.com/world/rss",
+    "reuters": "https://www.reuters.com/world/rss",
+    "dw": "https://rss.dw.com/rdf/rss-en-all",
+    "france24": "https://www.france24.com/en/rss",
+    "foxnews": "https://www.youtube.com/feeds/videos.xml?channel_id=UCXIJgqnII2ZOINSWNOGFThA",
+    "cnn": "https://www.youtube.com/feeds/videos.xml?channel_id=UCupvZG-5ko_eiXAupbDfxWw",
+    "msnbc": "https://www.youtube.com/feeds/videos.xml?channel_id=UCaXkIU1QidjPwiAYu6GcHjg",
+    "cbsnews": "https://www.youtube.com/feeds/videos.xml?channel_id=UC8p1vwvWtl6T73JiExfWs1g",
+    "ap": "https://www.youtube.com/feeds/videos.xml?channel_id=UC52X5wxOL_s5yw0dQk7NtgA",
+    "dwnews_yt": "https://www.youtube.com/feeds/videos.xml?channel_id=UCOfPKsv37EVniX7Ww51jNxA",
+    "france24_yt": "https://www.youtube.com/feeds/videos.xml?channel_id=UCQfwfsi5VrQ8yKZ-UWmAEFg",
+    "pbsnewshour": "https://www.youtube.com/feeds/videos.xml?channel_id=UC6ZFN9Tx6xh-skXCuRHCDpQ"
   },
   "seeds": []
 }
