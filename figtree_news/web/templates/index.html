@@ -30,6 +30,9 @@
           </h3>
           <div class="narrative-meta">
             <span class="source-count">{{ n.sources | length }} sources</span>
+            {% if n.frame_shift %}
+            <span class="shift-badge" title="{{ n.frame_shift_note }}">frame shift</span>
+            {% endif %}
             <span class="first-reporter">
               First: <a href="/source/{{ n.first_reporter }}">{{ n.first_reporter }}</a>
             </span>

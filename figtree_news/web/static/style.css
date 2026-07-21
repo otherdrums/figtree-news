@@ -536,6 +536,17 @@ code {
   font-weight: 500;
 }
 
+.shift-badge {
+  background: rgba(255, 193, 7, 0.15);
+  color: #FFC107;
+  padding: 0.15rem 0.6rem;
+  border-radius: 4px;
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 .first-reporter {
   color: var(--gray-text);
 }

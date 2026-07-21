@@ -166,6 +166,17 @@ def compute_lineage(store: FigmentStore) -> dict[str, Any]:
         # Use first reporter's headline as the narrative title; fall back to first sentence.
         narrative_title = first.meta.get("title") or first.text.split(".")[0].strip()
         narrative_text = narrative_title
+
+        # Detect frame shift: compare newest article's boundary to first reporter's
+        newest = group[-1]
+        frame_shift = False
+        if len(group) >= 2 and newest.figment_id != first.figment_id:
+            import numpy as np
+            a = first.boundary.astype(np.float64)
+            b = newest.boundary.astype(np.float64)
+            cos_sim = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
+            frame_shift = cos_sim < 0.85
+
         narrative = Figment.create(
             text=narrative_text,
             boundary=first.boundary.copy(),
@@ -178,6 +189,8 @@ def compute_lineage(store: FigmentStore) -> dict[str, Any]:
                 "first_reporter_source": first.meta.get("source_id"),
                 "first_reporter_url": first.meta.get("url"),
                 "entities": sorted(set().union(*[_entities(f.text) for f in group]))[:12],
+                "frame_shift": frame_shift,
+                "frame_shift_note": "Coverage framing shifted from first report" if frame_shift else "",
             },
             figment_id=narrative_id,
         )
@@ -219,6 +232,8 @@ def get_narratives(store: FigmentStore, *, all_figs: list | None = None) -> list
                     "first_reporter_url": f.meta.get("first_reporter_url"),
                     "entities": f.meta.get("entities", []),
                     "text": f.text,
+                    "frame_shift": f.meta.get("frame_shift", False),
+                    "frame_shift_note": f.meta.get("frame_shift_note", ""),
                 }
             )
     return out
