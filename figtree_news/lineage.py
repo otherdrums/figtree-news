@@ -71,10 +71,10 @@ def _parse_time(fig: Figment) -> datetime | None:
     return None
 
 
-def _articles(store: FigmentStore) -> list[Figment]:
+def _articles(store: FigmentStore, *, all_figs: list | None = None) -> list[Figment]:
     return [
         f
-        for f in store.all()
+        for f in (all_figs if all_figs is not None else store.all())
         if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()
     ]
 
@@ -116,7 +116,13 @@ def _cluster(articles: list[Figment]) -> list[list[Figment]]:
 
 def compute_lineage(store: FigmentStore) -> dict[str, Any]:
     """Recompute lineage figments from the current store. Idempotent."""
-    articles = _articles(store)
+    all_figs = store.all()
+    # Purge old narrative/derivative figments so stale clusters don't linger.
+    for f in all_figs:
+        if f.meta.get("edge_type") in ("narrative", "derivative"):
+            store.delete(f.figment_id)
+
+    articles = _articles(store, all_figs=all_figs)
     clusters = _cluster(articles)
     figments: list[Figment] = []
     summaries: list[dict[str, Any]] = []
