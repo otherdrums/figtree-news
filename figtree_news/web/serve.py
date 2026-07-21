@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
+import sys
 import time
 from typing import Any
 
@@ -28,6 +30,9 @@ from ..crawler import Crawler
 from ..lineage import get_narratives, get_derivatives, source_agenda
 from ..pipeline import run_pipeline
 from ..query import query as run_query
+
+# Ctrl-C must kill immediately even if a background crawl thread is loading the model.
+signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 
 _HERE = os.path.dirname(__file__)
 TEMPLATES_DIR = os.path.join(_HERE, "templates")
@@ -241,6 +246,8 @@ async def _run_continuous_crawl(
     _crawl_state["stop_requested"] = False
 
     while not _crawl_state.get("stop_requested"):
+        if _crawl_state.get("stop_requested"):
+            break
         try:
             await _run_crawl_tick(
                 db, sources_path, feeds, seeds, max_articles, summarize, model_id
