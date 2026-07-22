@@ -354,12 +354,18 @@ def evaluate_narratives(
     already = _evaluated_narrative_ids(store, run)
     pending = [n for n in narratives if n["narrative_id"] not in already]
 
+    print(f"[eval] total_narratives={len(narratives)}  already_evaluated={len(already)}  pending={len(pending)}")
+
     verdicts: list[Figment] = []
     corrections_suggested = 0
 
     for narrative in pending:
         nid = narrative["narrative_id"]
-        print(f"[eval] evaluating narrative {nid[:8]}: \"{narrative.get('title', '')[:60]}\"")
+        title = narrative.get('title', '')[:60]
+        sources = narrative.get('sources', [])
+        members = narrative.get('members', [])
+        print(f"\n[eval] ── Narrative {nid[:8]}: \"{title}\"")
+        print(f"[eval]    sources={sources}  members={len(members)}")
 
         member_ids = narrative.get("members", [])
         member_articles = [articles_by_id[mid] for mid in member_ids if mid in articles_by_id]
@@ -385,6 +391,14 @@ def evaluate_narratives(
 
             verdict_text = f"Narrative {nid[:8]}: {'PASS' if valid else 'FAIL'} — "
             verdict_text += f"{len(issues)} issues" if issues else "all articles belong"
+
+            print(f"[eval]    LLM verdict: {'PASS' if valid else 'FAIL'}  issues={len(issues)}")
+            if issues:
+                for issue in issues[:3]:
+                    if isinstance(issue, dict):
+                        idx = issue.get("article_index", "?")
+                        reason = issue.get("reason", "")[:80]
+                        print(f"[eval]      issue[{idx}]: {reason}")
 
             verdict = Figment.create(
                 text=verdict_text,
@@ -413,12 +427,17 @@ def evaluate_narratives(
                     f"Remove article {target_article.figment_id[:8]} from narrative {nid[:8]}: {reason}"
                 )
                 corr_id = _make_fig_id(f"corr:{nid}:remove:{target_article.figment_id}")
+                existing_count = next((f.meta.get("confirmation_count", 1) for f in all_figs if f.figment_id == corr_id), 0)
                 correction = _upsert_correction(
                     store, all_figs, corr_id, corr_text, "remove",
                     nid, target_article.figment_id, run.figment_id, reason,
                 )
                 verdicts.append(correction)
                 corrections_suggested += 1
+                if existing_count > 0:
+                    print(f"[eval]      correction INCREMENTED: article {target_article.figment_id[:8]} (count={existing_count+1})")
+                else:
+                    print(f"[eval]      correction NEW: article {target_article.figment_id[:8]} (count=1)")
 
             # Check for LLM-suggested parameter change
             suggested = parsed.get("suggested_boundary_threshold") if isinstance(parsed, dict) else None

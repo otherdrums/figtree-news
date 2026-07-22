@@ -222,12 +222,26 @@ class Crawler:
     def crawl_feed(self, source_id: str, feed_uri: str, max_articles: int | None = None,
                    since: str = "", before: str = "") -> int:
         articles = _read_feed(feed_uri, source_id, since=since, before=before)
+        total_in_feed = len(articles)
         added = 0
+        skipped_dedup = 0
+        skipped_short = 0
+
         for art in articles:
             if max_articles is not None and added >= max_articles:
                 break
             if self.ingest_article(source_id, art):
                 added += 1
+            else:
+                url = art.get("url")
+                text = art.get("text", "")
+                if url and self._already(url):
+                    skipped_dedup += 1
+                elif len(text.strip()) < 40:
+                    skipped_short += 1
+
+        if total_in_feed > 0:
+            print(f"[crawler] {source_id}: in_feed={total_in_feed}  added={added}  dedup={skipped_dedup}  short={skipped_short}")
         return added
 
     def crawl_seeds(self, seeds: list[str], source_id: str | None = None) -> int:

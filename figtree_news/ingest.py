@@ -52,6 +52,9 @@ def _read_feed(uri: str, source_id: str, since: str = "", before: str = "") -> l
     if _before and len(before.strip()) <= 10:
         _before = _before.replace(hour=23, minute=59, second=59)
 
+    raw_count = len(getattr(parsed, "entries", []))
+    filtered_out = 0
+
     for entry in getattr(parsed, "entries", []):
         summary = entry.get("summary") or ""
         content = entry.get("content")
@@ -73,8 +76,10 @@ def _read_feed(uri: str, source_id: str, since: str = "", before: str = "") -> l
             pub_dt = _parse_date_param(pub_raw)
             if pub_dt:
                 if _since and pub_dt < _since:
+                    filtered_out += 1
                     continue
                 if _before and pub_dt > _before:
+                    filtered_out += 1
                     continue
 
         # Extract article image from feed metadata
@@ -93,6 +98,8 @@ def _read_feed(uri: str, source_id: str, since: str = "", before: str = "") -> l
                 "video_url": video_url,
             }
         )
+    if _since or _before:
+        print(f"[ingest] {source_id}: raw_feed={raw_count}  after_date_filter={len(articles)}  filtered_out={filtered_out}  since={since or 'none'}  before={before or 'none'}")
     return articles
 
 

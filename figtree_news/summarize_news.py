@@ -57,7 +57,14 @@ def build_world_brief(
     figs = {f.figment_id: f for f in _article_images(store)}
     selected = [figs[mid] for mid in dict.fromkeys(members) if mid in figs][:top_n]
     if not selected:
+        print(f"[brief] no articles selected for brief generation")
         return {"brief": "", "used": 0}
+
+    print(f"[brief] generating from {len(selected)} articles:")
+    for f in selected:
+        src = f.meta.get("source_id", "?")
+        title = f.meta.get("title", "")[:50]
+        print(f"[brief]   - {src}: {title}")
 
     gen = FigmentGenerator(model, tokenizer)
     result = gen.generate(
@@ -66,6 +73,7 @@ def build_world_brief(
         max_new_tokens=300,
     )
     brief = result.get("generated_text", "").strip()
+    print(f"[brief] generated {len(brief)} chars: {brief[:100]}...")
     brief_fig = Figment.create(
         text=brief,
         boundary=selected[0].boundary.copy(),

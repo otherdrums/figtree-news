@@ -28,6 +28,8 @@ def collect_pending_corrections(
     all_figs = store.all()
     corrections = [f for f in all_figs if f.meta.get("edge_type") == "correction" and not f.meta.get("applied", False)]
 
+    print(f"[correct] total_correction_figments={len(corrections)}")
+
     groups: dict[tuple[str, str, str], list[Figment]] = {}
     for c in corrections:
         ctype = c.meta.get("correction_type", "")
@@ -36,10 +38,15 @@ def collect_pending_corrections(
         key = (ctype, target_narrative, target_article)
         groups.setdefault(key, []).append(c)
 
+    print(f"[correct] unique_correction_groups={len(groups)}")
+
     confirmed = []
     for (ctype, tnid, taid), corrs in groups.items():
         confirmations = max(c.meta.get("confirmation_count", 1) for c in corrs)
         if confirmations >= confirmation_threshold:
+            reason = corrs[0].meta.get("reason", "")[:80]
+            print(f"[correct]   CONFIRMED: {ctype} article {taid[:8]} from narrative {tnid[:8]} (count={confirmations})")
+            print(f"[correct]     reason: {reason}")
             confirmed.append({
                 "correction_type": ctype,
                 "target_narrative": tnid,
@@ -48,6 +55,8 @@ def collect_pending_corrections(
                 "reason": corrs[0].meta.get("reason", ""),
                 "correction_ids": [c.figment_id for c in corrs],
             })
+        else:
+            print(f"[correct]   pending: {ctype} article {taid[:8]} from narrative {tnid[:8]} (count={confirmations} < threshold={confirmation_threshold})")
     return sorted(confirmed, key=lambda x: -x["confirmations"])
 
 
