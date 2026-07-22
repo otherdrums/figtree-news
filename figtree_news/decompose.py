@@ -42,19 +42,23 @@ Respond with ONLY valid JSON:
 class DecompositionEngine:
     """Background engine that decomposes sentences into role figments."""
     
-    def __init__(self, llm_config: LLMConfig, store: FigmentStore):
+    def __init__(self, llm_config: LLMConfig, store: FigmentStore, num_workers: int = 3):
         self.llm_config = llm_config
         self.store = store
         self.queue: asyncio.Queue[str] = asyncio.Queue()
         self._running = False
-        self._task: asyncio.Task | None = None
+        self._workers: list[asyncio.Task] = []
+        self.num_workers = num_workers  # Number of parallel workers
     
     def start(self):
-        """Start background decomposition worker."""
+        """Start background decomposition workers."""
         if not self._running:
             self._running = True
-            self._task = asyncio.create_task(self._worker_loop())
-            print(f"[decompose] Background worker started")
+            # Start multiple workers for parallel processing
+            for i in range(self.num_workers):
+                worker = asyncio.create_task(self._worker_loop(worker_id=i))
+                self._workers.append(worker)
+            print(f"[decompose] Started {self.num_workers} background workers")
             
             # Queue existing articles that need decomposition
             asyncio.create_task(self._queue_existing_articles())
@@ -80,34 +84,47 @@ class DecompositionEngine:
             traceback.print_exc()
     
     def stop(self):
-        """Stop background decomposition worker."""
+        """Stop background decomposition workers."""
         self._running = False
-        if self._task:
-            self._task.cancel()
-            print(f"[decompose] Background worker stopped")
+        for worker in self._workers:
+            worker.cancel()
+        self._workers.clear()
+        print(f"[decompose] All background workers stopped")
     
     async def queue_article(self, article_id: str):
         """Queue an article for decomposition."""
         await self.queue.put(article_id)
     
-    async def _worker_loop(self):
+    async def _worker_loop(self, worker_id: int = 0):
         """Background worker that processes decomposition queue."""
         from .evaluate import LLMClient
         
         if not self.llm_config.url:
-            print(f"[decompose] No LLM URL configured, skipping decomposition")
+            print(f"[decompose-{worker_id}] No LLM URL configured, skipping decomposition")
             return
         
         client = LLMClient(self.llm_config)
+        processed_count = 0
         
         while self._running:
             try:
-                article_id = await asyncio.wait_for(self.queue.get(), timeout=1.0)
+                # Get next item from queue (blocks until available)
+                article_id = await self.queue.get()
+                
+                # Process immediately - no artificial delays
                 await self._decompose_article(article_id, client)
-            except asyncio.TimeoutError:
-                continue
+                processed_count += 1
+                
+                # Log progress every 10 articles
+                if processed_count % 10 == 0:
+                    queue_size = self.queue.qsize()
+                    print(f"[decompose-{worker_id}] Progress: {processed_count} processed, {queue_size} remaining")
+                    
+            except asyncio.CancelledError:
+                print(f"[decompose-{worker_id}] Worker cancelled after processing {processed_count} articles")
+                break
             except Exception as exc:
-                print(f"[decompose] Error processing article: {exc}")
+                print(f"[decompose-{worker_id}] Error processing article: {exc}")
                 import traceback
                 traceback.print_exc()
     
