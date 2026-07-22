@@ -223,7 +223,7 @@ async def _run_crawl_tick(
                 _warm_cache(store)
                 await _broadcast({"type": "content_update", "data": {
                     "source": sid, "added": added,
-                    "total_articles": search_idx.article_count(),
+                    "total_articles": get_index(db.replace(".lance", "_fts.db")).article_count(),
                 }})
 
         if _crawl_state.get("stop_requested"):
