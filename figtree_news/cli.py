@@ -226,7 +226,7 @@ def query_cmd(
         model, tokenizer, store, prompt,
         k=k, min_trust=min_trust, faithful=faithful, max_new_tokens=max_new_tokens,
     )
-    typer.echo(res.get("text", ""))
+    typer.echo(res.get("generated_text", ""))
 
 
 @app.command("export-graph")

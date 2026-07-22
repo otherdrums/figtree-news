@@ -178,12 +178,14 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
         # Detect frame shift: compare newest article's boundary to first reporter's
         newest = group[-1]
         frame_shift = False
+        frame_shift_score = None
         if len(group) >= 2 and newest.figment_id != first.figment_id:
             import numpy as np
             a = first.boundary.astype(np.float64)
             b = newest.boundary.astype(np.float64)
             cos_sim = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
             frame_shift = cos_sim < 0.85
+            frame_shift_score = cos_sim
 
         narrative = Figment.create(
             text=narrative_text,
@@ -198,7 +200,12 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
                 "first_reporter_url": first.meta.get("url"),
                 "entities": sorted(set().union(*[_entities(f.text) for f in group]))[:12],
                 "frame_shift": frame_shift,
-                "frame_shift_note": "Coverage framing shifted from first report" if frame_shift else "",
+                "frame_shift_score": frame_shift_score,
+                "frame_shift_note": (
+                    f"Boundary similarity {frame_shift_score:.2f} < 0.85 threshold "
+                    f"(first: {first.meta.get('source_id')}, latest: {newest.meta.get('source_id')})"
+                    if frame_shift else ""
+                ),
             },
             figment_id=narrative_id,
         )
@@ -241,6 +248,7 @@ def get_narratives(store: FigmentStore, *, all_figs: list | None = None) -> list
                     "entities": f.meta.get("entities", []),
                     "text": f.text,
                     "frame_shift": f.meta.get("frame_shift", False),
+                    "frame_shift_score": f.meta.get("frame_shift_score"),
                     "frame_shift_note": f.meta.get("frame_shift_note", ""),
                 }
             )

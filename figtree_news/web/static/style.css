@@ -561,6 +561,42 @@ code {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.shift-badge:hover {
+  background: rgba(255, 193, 7, 0.3);
+  text-decoration: none;
+}
+
+.frame-shift-detail {
+  margin: 1rem 0;
+}
+.frame-shift-card {
+  background: rgba(255, 193, 7, 0.08);
+  border: 1px solid rgba(255, 193, 7, 0.25);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+}
+.frame-shift-score {
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+}
+.frame-shift-threshold {
+  color: var(--gray-text);
+  font-size: 0.85rem;
+}
+.frame-shift-explain {
+  color: var(--gray-text);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0.5rem 0;
+}
+.frame-shift-meta {
+  font-size: 0.85rem;
+  color: var(--gray-text);
+  margin: 0;
 }
 
 .first-reporter {

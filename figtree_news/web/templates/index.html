@@ -52,7 +52,9 @@
           <div class="narrative-meta">
             <span class="source-count">{{ n.sources | length }} sources</span>
             {% if n.frame_shift %}
-            <span class="shift-badge" title="{{ n.frame_shift_note }}">frame shift</span>
+            <a href="/narrative/{{ n.narrative_id }}#frame-shift" class="shift-badge" title="{{ n.frame_shift_note }}">
+              frame shift{% if n.frame_shift_score is not none %} ({{ "%.2f"|format(n.frame_shift_score) }}){% endif %}
+            </a>
             {% endif %}
             <span class="first-reporter">
               First: <a href="/source/{{ n.first_reporter }}">{{ n.first_reporter }}</a>

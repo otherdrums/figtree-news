@@ -35,7 +35,7 @@ def ensure_article_summaries(
         result = gen.generate(
             [f], "Summarize the above article in 2-3 concise sentences.", max_new_tokens=96
         )
-        f.meta["summary"] = result.get("text", "").strip()
+        f.meta["summary"] = result.get("generated_text", "").strip()
         updated.append(f)
         done += 1
         if done >= limit:
@@ -65,7 +65,7 @@ def build_world_brief(
         "Write a brief world news summary covering the following reports.",
         max_new_tokens=300,
     )
-    brief = result.get("text", "").strip()
+    brief = result.get("generated_text", "").strip()
     brief_fig = Figment.create(
         text=brief,
         boundary=selected[0].boundary.copy(),

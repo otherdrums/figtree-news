@@ -19,6 +19,27 @@
     <p class="meta">{{ narrative.text }}</p>
     <p class="meta">Entities: {{ narrative.entities | join(", ") }}</p>
 
+    {% if narrative.frame_shift %}
+    <section id="frame-shift" class="frame-shift-detail">
+      <h3>Frame Shift Detected</h3>
+      <div class="frame-shift-card">
+        <div class="frame-shift-score">
+          Boundary similarity: <strong>{{ "%.3f"|format(narrative.frame_shift_score) if narrative.frame_shift_score is not none else "N/A" }}</strong>
+          <span class="frame-shift-threshold">(threshold: 0.85)</span>
+        </div>
+        <p class="frame-shift-explain">
+          The latest coverage's boundary vector diverges from the first reporter's,
+          indicating a shift in framing or emphasis over time.
+        </p>
+        {% if narrative.first_reporter %}
+        <p class="frame-shift-meta">
+          First reported by <a href="/source/{{ narrative.first_reporter }}">{{ narrative.first_reporter }}</a>
+        </p>
+        {% endif %}
+      </div>
+    </section>
+    {% endif %}
+
     <section>
       <h3>First reporter</h3>
       <p>

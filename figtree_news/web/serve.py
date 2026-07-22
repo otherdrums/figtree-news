@@ -478,7 +478,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         res = run_query(
             gen.model, gen.tokenizer, store, q, k=k, min_trust=min_trust, faithful=True
         )
-        return {"query": q, "answer": res.get("text", ""), "figments_used": res.get("figments_used", 0)}
+        return {"query": q, "answer": res.get("generated_text", ""), "figments_used": res.get("figments_used", 0)}
 
     # ---- Crawl Control API ---------------------------------------------- #
     @app.get("/api/crawl/status")
