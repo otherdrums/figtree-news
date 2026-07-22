@@ -38,9 +38,9 @@ class SourceRegistry:
         except FileNotFoundError:
             return cls({}, {}, [])
         out: dict[str, SourceConfig] = {}
-        # Top-level "feeds"/"seeds" keys describe crawling, not sources.
+        # Top-level "feeds"/"seeds"/"llm" keys describe crawling/llm, not sources.
         for sid, spec in raw.items():
-            if sid in ("feeds", "seeds") or not isinstance(spec, dict):
+            if sid in ("feeds", "seeds", "llm") or not isinstance(spec, dict):
                 continue
             out[sid] = SourceConfig(
                 source_id=sid,

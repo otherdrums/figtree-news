@@ -214,6 +214,11 @@
       </label>
     </div>
     <div class="form-group">
+      <label title="Use external LLM (Qwen 35B) for cluster review, frame shift verification, and quality feedback">
+        <input type="checkbox" id="llm-enabled"> Enable LLM Review
+      </label>
+    </div>
+    <div class="form-group">
       <label for="interval">Pause between ticks (seconds, 0 = no pause)</label>
       <input type="number" id="interval" value="0" min="0">
     </div>
@@ -256,7 +261,7 @@ let crawlRunning = false;
 
 // Persist crawl settings across page reloads
 const SETTINGS_KEY = 'figtree-news-crawl-settings';
-const SETTING_IDS = ['max-articles', 'max-stories', 'since', 'before', 'compute-kv', 'summarize', 'interval'];
+const SETTING_IDS = ['max-articles', 'max-stories', 'since', 'before', 'compute-kv', 'summarize', 'interval', 'llm-enabled'];
 
 function saveSettings() {
   const settings = {};
@@ -406,6 +411,7 @@ async function runCrawl(continuous) {
     summarize: document.getElementById('summarize').checked,
     continuous: continuous,
     interval: parseInt(document.getElementById('interval').value),
+    llm_enabled: document.getElementById('llm-enabled').checked,
   };
   try {
     const resp = await fetch('/api/crawl/run', {
@@ -472,6 +478,9 @@ fetch('/api/config').then(r => r.json()).then(cfg => {
     Object.entries(cfg.feeds).forEach(([s, u]) => addFeedRow(s, u));
   }
   if (cfg.seeds) cfg.seeds.forEach(u => addSeedRow(u));
+  if (cfg.llm) {
+    document.getElementById('llm-enabled').checked = cfg.llm.enabled || false;
+  }
 }).catch(() => {});
 </script>
 {% endblock %}

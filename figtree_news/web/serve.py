@@ -34,6 +34,7 @@ from .. import summarize_news
 from ..config import SourceRegistry
 from ..crawler import Crawler
 from ..lineage import get_narratives, get_derivatives, source_agenda
+from ..llm_config import LLMConfig
 from ..pipeline import run_pipeline
 from ..query import query as run_query
 from ..search_index import get_index
@@ -151,6 +152,7 @@ async def _run_crawl_tick(
     max_stories: int = 0,
     since: str = "",
     before: str = "",
+    llm_enabled: bool = False,
 ):
     """Single crawl tick. Heavy (model) work runs in threads so the event loop stays free."""
     global _crawl_state
@@ -248,9 +250,18 @@ async def _run_crawl_tick(
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
         # Run pipeline in thread
+        llm_config = LLMConfig.from_sources_json(sources_path)
+        if llm_enabled and llm_config.url:
+            llm_config.enabled = True
+            _crawl_state["current_step"] = "pipeline"
+            _crawl_state["message"] = "Running pipeline (trust, lineage, eval, summaries, brief)..."
+            _crawl_state["total"] = 6
+        await _broadcast({"type": "crawl_status", "data": _crawl_state})
+
         pipe_stats = await asyncio.to_thread(
             run_pipeline, model, tokenizer, store,
             do_summaries=summarize, do_brief=True, max_stories=max_stories,
+            llm_config=llm_config if llm_enabled and llm_config.url else None,
         )
         _crawl_state["progress"] = 4
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
@@ -298,6 +309,7 @@ async def _run_continuous_crawl(
     max_stories: int = 0,
     since: str = "",
     before: str = "",
+    llm_enabled: bool = False,
 ):
     """Loop crawl ticks until stop_requested."""
     global _crawl_state
@@ -314,7 +326,7 @@ async def _run_continuous_crawl(
         try:
             await _run_crawl_tick(
                 db, sources_path, feeds, seeds, max_articles, summarize, compute_kv, model_id,
-                max_stories=max_stories, since=since, before=before,
+                max_stories=max_stories, since=since, before=before, llm_enabled=llm_enabled,
             )
         except asyncio.CancelledError:
             break
@@ -511,6 +523,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         max_stories = body.get("max_stories", 0)
         since = body.get("since", "")
         before = body.get("before", "")
+        llm_enabled = body.get("llm_enabled", False)
 
         # Load feeds/seeds from sources.json if not provided
         if not feeds and not seeds:
@@ -536,14 +549,14 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
             task = asyncio.create_task(
                 _run_continuous_crawl(
                     db, sources, feeds, seeds, max_articles, summarize, compute_kv, model_id, interval,
-                    max_stories=max_stories, since=since, before=before,
+                    max_stories=max_stories, since=since, before=before, llm_enabled=llm_enabled,
                 )
             )
         else:
             task = asyncio.create_task(
                 _run_crawl_tick(
                     db, sources, feeds, seeds, max_articles, summarize, compute_kv, model_id,
-                    max_stories=max_stories, since=since, before=before,
+                    max_stories=max_stories, since=since, before=before, llm_enabled=llm_enabled,
                 )
             )
         _crawl_state["task"] = task
@@ -625,8 +638,17 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
 
     @app.get("/api/config")
     def api_config():
-        """Return feeds/seeds from sources.json for the control panel."""
-        return {"feeds": registry.feeds, "seeds": registry.seeds}
+        """Return feeds/seeds/llm from sources.json for the control panel."""
+        llm_config = LLMConfig.from_sources_json(sources)
+        return {
+            "feeds": registry.feeds,
+            "seeds": registry.seeds,
+            "llm": {
+                "url": llm_config.url,
+                "model": llm_config.model,
+                "enabled": llm_config.enabled,
+            },
+        }
 
     @app.get("/api/search")
     def api_search(q: str = "", range: str = "all", sort: str = "date_desc", page: int = 1, limit: int = 20):
