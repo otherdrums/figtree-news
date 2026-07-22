@@ -92,6 +92,7 @@ class Crawler:
         compute_kv: bool = False,
         summarize_images: bool = False,
         kv_manager=None,
+        decompose_engine=None,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -103,6 +104,7 @@ class Crawler:
         self.compute_kv = compute_kv
         self.summarize_images = summarize_images
         self.kv_manager = kv_manager
+        self.decompose_engine = decompose_engine
         self.seen: set[str] = self._load_seen()
 
     # -- URL de-duplication ------------------------------------------------ #
@@ -215,6 +217,18 @@ class Crawler:
             summarize_images=self.summarize_images,
             kv_manager=self.kv_manager,
         )
+        
+        # Queue for background decomposition
+        if self.decompose_engine and url:
+            # Find the article figment we just created
+            all_figs = self.store.all()
+            for fig in reversed(all_figs):
+                if (fig.meta.get("is_image") and 
+                    fig.meta.get("source_id") == source_id and
+                    fig.meta.get("url") == url):
+                    asyncio.create_task(self.decompose_engine.queue_article(fig.figment_id))
+                    break
+        
         if url:
             self._mark(url)
         return True

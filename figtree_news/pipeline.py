@@ -131,6 +131,25 @@ def run_pipeline(
     else:
         print(f"\n[pipeline] Phase 7: Brief review SKIPPED")
 
+    # Phase 8: Queue articles for decomposition (background processing)
+    decompose_out = {"queued": 0}
+    if llm_config and llm_config.enabled and llm_config.url:
+        t0 = time.time()
+        print(f"\n[pipeline] Phase 8: Queue articles for decomposition (background)")
+        from .decompose import DecompositionEngine
+        
+        # Create decomposition engine (it will be started by the server)
+        # Here we just queue articles for processing
+        all_figs = store.all()
+        articles = [f for f in all_figs if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()]
+        
+        # Count articles that need decomposition
+        needs_decomp = sum(1 for a in articles if not a.meta.get("decomposed"))
+        print(f"[pipeline]   {needs_decomp} articles queued for decomposition (processing in background)")
+        decompose_out["queued"] = needs_decomp
+    else:
+        print(f"\n[pipeline] Phase 8: Decomposition SKIPPED (LLM not enabled)")
+
     total_time = time.time() - t_start
     print(f"\n{'='*60}")
     print(f"[pipeline] COMPLETE — total_time={total_time:.1f}s")
@@ -142,6 +161,7 @@ def run_pipeline(
         "lineage_edges": lineage_out["edges"],
         "summarized": summaries_out["summarized"],
         "brief_used": brief_out["used"],
+        "decomposed": decompose_out["queued"],
         **eval_out,
         **brief_eval,
     }

@@ -50,6 +50,8 @@ STATIC_DIR = os.path.join(_HERE, "static")
 _gen_cache: dict[str, Any] = {}
 _model_cache: dict[str, Any] = {}
 _data_cache: dict[str, Any] = {"data": None, "ts": 0.0}
+_decompose_engine: Any = None
+_cogitate_engine: Any = None
 _crawl_state: dict[str, Any] = {
     "running": False,
     "task": None,
@@ -189,6 +191,7 @@ async def _run_crawl_tick(
             seen_path="./seen_urls.json",
             compute_kv=compute_kv, summarize_images=summarize,
             kv_manager=kv_manager,
+            decompose_engine=_decompose_engine,
         )
 
         _crawl_state["current_step"] = "crawling_feeds"
@@ -374,9 +377,40 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
 
     app.state.store = store
     app.state.registry = registry
+    
+    # Initialize background engines
+    llm_config = LLMConfig.from_sources_json(sources)
+    global _decompose_engine, _cogitate_engine
+    
+    if llm_config.enabled and llm_config.url:
+        from ..decompose import DecompositionEngine
+        from ..cogitate import CogitationEngine
+        
+        _decompose_engine = DecompositionEngine(llm_config, store)
+        _cogitate_engine = CogitationEngine(llm_config, store, interval_hours=6)
+        
+        app.state.decompose_engine = _decompose_engine
+        app.state.cogitate_engine = _cogitate_engine
 
     if os.path.isdir(STATIC_DIR):
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    # ---- Startup/Shutdown Events ----------------------------------------- #
+    @app.on_event("startup")
+    async def startup_event():
+        global _decompose_engine, _cogitate_engine
+        if _decompose_engine:
+            _decompose_engine.start()
+        if _cogitate_engine:
+            _cogitate_engine.start()
+
+    @app.on_event("shutdown")
+    async def shutdown_event():
+        global _decompose_engine, _cogitate_engine
+        if _decompose_engine:
+            _decompose_engine.stop()
+        if _cogitate_engine:
+            _cogitate_engine.stop()
 
     def _render(request: Request, name: str, context: dict[str, Any]) -> HTMLResponse:
         template = templates.get_template(name)
