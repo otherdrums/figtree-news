@@ -495,14 +495,15 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     # ---- Crawl Control API ---------------------------------------------- #
     @app.get("/api/crawl/status")
     def crawl_status():
-        return _crawl_state
+        # Filter out non-serializable fields (task is an asyncio.Task)
+        return {k: v for k, v in _crawl_state.items() if k != "task"}
 
     @app.post("/api/crawl/run")
     async def crawl_run(request: Request):
         """Trigger a single crawl tick or start continuous mode."""
         global _crawl_state
         if _crawl_state["running"]:
-            return {"error": "Crawl already running", "state": _crawl_state}
+            return {"error": "Crawl already running", "state": {k: v for k, v in _crawl_state.items() if k != "task"}}
 
         try:
             body = await request.json()

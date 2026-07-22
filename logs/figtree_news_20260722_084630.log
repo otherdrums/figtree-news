@@ -1,0 +1,14 @@
+2026-07-22 08:46:30 [INFO] Logging to ./logs/figtree_news_20260722_084630.log
+2026-07-22 08:47:44 [INFO] HTTP Request: HEAD https://huggingface.co/unsloth/Qwen3-4B-bnb-4bit/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-07-22 08:47:44 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/unsloth/Qwen3-4B-bnb-4bit/cad0bedfdd862093a12af478cb974ab2addd0e0a/config.json "HTTP/1.1 200 OK"
+2026-07-22 08:47:44 [INFO] HTTP Request: HEAD https://huggingface.co/unsloth/Qwen3-4B-bnb-4bit/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-07-22 08:47:44 [WARNING] Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-07-22 08:47:44 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/unsloth/Qwen3-4B-bnb-4bit/cad0bedfdd862093a12af478cb974ab2addd0e0a/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-07-22 08:47:44 [INFO] HTTP Request: GET https://huggingface.co/api/models/unsloth/Qwen3-4B-bnb-4bit/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-07-22 08:47:44 [INFO] HTTP Request: GET https://huggingface.co/api/models/unsloth/Qwen3-4B-bnb-4bit/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-07-22 08:47:45 [INFO] HTTP Request: GET https://huggingface.co/api/models/unsloth/Qwen3-4B-bnb-4bit "HTTP/1.1 200 OK"
+2026-07-22 08:47:45 [INFO] HTTP Request: HEAD https://huggingface.co/unsloth/Qwen3-4B-bnb-4bit/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-07-22 08:47:45 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/unsloth/Qwen3-4B-bnb-4bit/cad0bedfdd862093a12af478cb974ab2addd0e0a/config.json "HTTP/1.1 200 OK"
+2026-07-22 08:47:48 [INFO] HTTP Request: HEAD https://huggingface.co/unsloth/Qwen3-4B-bnb-4bit/resolve/main/generation_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-07-22 08:47:48 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/unsloth/Qwen3-4B-bnb-4bit/cad0bedfdd862093a12af478cb974ab2addd0e0a/generation_config.json "HTTP/1.1 200 OK"
+2026-07-22 08:47:48 [INFO] HTTP Request: HEAD https://huggingface.co/unsloth/Qwen3-4B-bnb-4bit/resolve/main/custom_generate/generate.py "HTTP/1.1 404 Not Found"

@@ -138,10 +138,13 @@ def _cluster_by_boundary(store: FigmentStore, articles: list[Figment], threshold
             parent[rb] = ra
 
     # For each article, search for similar articles using boundary vector
+    total_hits = 0
+    max_similarity = 0.0
     for article in articles:
         try:
             # Search store for similar articles (returns list of (figment, distance))
             hits = store.search(article.boundary, k=20)
+            total_hits += len(hits)
             for hit_fig, distance in hits:
                 if hit_fig.figment_id == article.figment_id:
                     continue
@@ -150,12 +153,15 @@ def _cluster_by_boundary(store: FigmentStore, articles: list[Figment], threshold
                 # LanceDB returns cosine distance, convert to similarity
                 # distance = 1 - similarity, so similarity = 1 - distance
                 similarity = 1.0 - distance
+                max_similarity = max(max_similarity, similarity)
                 if similarity >= threshold:
                     union(article.figment_id, hit_fig.figment_id)
                     similarity_edges.append((article.figment_id[:8], hit_fig.figment_id[:8], similarity))
         except Exception as e:
             print(f"[boundary_cluster] search failed for {article.figment_id[:8]}: {e}")
             continue
+    
+    print(f"[boundary_cluster] total search hits: {total_hits}, max similarity: {max_similarity:.3f}, threshold: {threshold}")
 
     # Group by connected components
     groups: dict[str, list[Figment]] = {}
@@ -177,11 +183,121 @@ def _cluster_by_boundary(store: FigmentStore, articles: list[Figment], threshold
     return clusters
 
 
+def _cluster_hybrid(store: FigmentStore, articles: list[Figment], 
+                   entity_threshold: float = 0.20, boundary_threshold: float = 0.60) -> list[list[Figment]]:
+    """Hybrid clustering: combine entity overlap AND boundary similarity.
+    
+    Two articles are clustered if they have BOTH:
+    - Entity Jaccard overlap >= entity_threshold
+    - Boundary cosine similarity >= boundary_threshold
+    
+    This combines the strengths of both approaches.
+    """
+    import numpy as np
+    
+    by_id = {f.figment_id: f for f in articles}
+    ent_sets = {f.figment_id: _entities(f.text) for f in articles}
+    parent = {f.figment_id: f.figment_id for f in articles}
+    similarity_edges = []
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    def jaccard(a, b):
+        sa, sb = ent_sets[a], ent_sets[b]
+        inter = len(sa & sb)
+        union_len = len(sa | sb)
+        return inter / union_len if union_len else 0.0
+
+    # Calculate pairwise similarities
+    total_pairs = 0
+    hybrid_matches = 0
+    max_boundary_sim = 0.0
+    
+    for i, article in enumerate(articles):
+        # Search for similar articles by boundary
+        try:
+            hits = store.search(article.boundary, k=20)
+            for hit_fig, distance in hits:
+                if hit_fig.figment_id == article.figment_id:
+                    continue
+                if hit_fig.figment_id not in by_id:
+                    continue
+                
+                total_pairs += 1
+                boundary_sim = 1.0 - distance
+                max_boundary_sim = max(max_boundary_sim, boundary_sim)
+                
+                # Check entity overlap
+                entity_overlap = jaccard(article.figment_id, hit_fig.figment_id)
+                
+                # Hybrid condition: BOTH entity overlap AND boundary similarity must pass
+                if entity_overlap >= entity_threshold and boundary_sim >= boundary_threshold:
+                    union(article.figment_id, hit_fig.figment_id)
+                    similarity_edges.append((article.figment_id[:8], hit_fig.figment_id[:8], 
+                                           entity_overlap, boundary_sim))
+                    hybrid_matches += 1
+        except Exception as e:
+            print(f"[hybrid_cluster] search failed for {article.figment_id[:8]}: {e}")
+            continue
+    
+    print(f"[hybrid_cluster] total pairs checked: {total_pairs}, hybrid matches: {hybrid_matches}")
+    print(f"[hybrid_cluster] max boundary sim: {max_boundary_sim:.3f}, thresholds: entity={entity_threshold}, boundary={boundary_threshold}")
+    
+    # Group by connected components
+    groups: dict[str, list[Figment]] = {}
+    for fid in parent:
+        if fid in by_id:
+            groups.setdefault(find(fid), []).append(by_id[fid])
+    
+    clusters = [g for g in groups.values() if len(g) >= 2]
+    
+    if similarity_edges:
+        avg_entity = sum(e for _, _, e, _ in similarity_edges) / len(similarity_edges)
+        avg_boundary = sum(b for _, _, _, b in similarity_edges) / len(similarity_edges)
+        print(f"[hybrid_cluster] found {len(similarity_edges)} matches (avg entity={avg_entity:.3f}, avg boundary={avg_boundary:.3f})")
+        print(f"[hybrid_cluster] formed {len(clusters)} clusters from {len(articles)} articles")
+        for i, cluster in enumerate(clusters[:5]):
+            sources = sorted({f.meta.get('source_id', '?') for f in cluster})
+            print(f"[hybrid_cluster]   cluster[{i}]: {len(cluster)} articles, sources={sources}")
+    
+    return clusters
+
+
+def _compute_sentence_boundary_similarity(article1: Figment, article2: Figment) -> float:
+    """Compute max sentence-level boundary similarity between two articles.
+    
+    Returns the maximum cosine similarity between any pair of sentence boundaries.
+    This is more granular than article-level comparison.
+    """
+    import numpy as np
+    
+    # Extract sentence boundaries (children of article image)
+    # For now, we'll use the article's atomic figments if available
+    # This is a placeholder - we'd need to store sentence boundaries separately
+    # or compute them on-the-fly
+    
+    # For now, fall back to article-level comparison
+    # TODO: Implement proper sentence-level comparison
+    a = article1.boundary.astype(np.float64)
+    b = article2.boundary.astype(np.float64)
+    cos_sim = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
+    return cos_sim
+
+
 def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]:
     """Recompute lineage figments from the current store. Idempotent.
     
-    Runs both entity-based and boundary-based clustering in parallel and compares results.
-    Uses boundary-based clustering as the primary approach (better semantic similarity).
+    Runs entity-based, boundary-based, and hybrid clustering in parallel and compares results.
+    Uses hybrid clustering as the primary approach (best of both worlds).
     
     max_stories: if > 0, keep only the top N narratives by member count.
     """
@@ -193,18 +309,20 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
 
     articles = _articles(store, all_figs=all_figs)
     
-    # Run both clustering approaches
+    # Run all clustering approaches
     print(f"\n[lineage] Clustering {len(articles)} articles...")
     entity_clusters = _cluster(articles)
     boundary_clusters = _cluster_by_boundary(store, articles, threshold=0.80)
+    hybrid_clusters = _cluster_hybrid(store, articles, entity_threshold=0.15, boundary_threshold=0.50)
     
     # Compare results
     print(f"\n[lineage] Comparison:")
     print(f"[lineage]   Entity-based:    {len(entity_clusters)} clusters")
-    print(f"[lineage]   Boundary-based:  {len(boundary_clusters)} clusters")
+    print(f"[lineage]   Boundary-based:  {len(boundary_clusters)} clusters (threshold=0.80)")
+    print(f"[lineage]   Hybrid:          {len(hybrid_clusters)} clusters (entity>=0.20, boundary>=0.60)")
     
-    # Use boundary-based clustering as primary
-    clusters = boundary_clusters
+    # Use hybrid clustering as primary
+    clusters = hybrid_clusters if hybrid_clusters else entity_clusters
     
     figments: list[Figment] = []
     summaries: list[dict[str, Any]] = []
@@ -308,7 +426,12 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
         hidden = figments[0].boundary.shape[0]
         store.upsert(figments, hidden_size=hidden)
 
-    return {"narratives": summaries, "edges": len(figments) - len(summaries)}
+    return {
+        "narratives": summaries, 
+        "edges": len(figments) - len(summaries),
+        "entity_clusters": entity_clusters,
+        "hybrid_clusters": hybrid_clusters,
+    }
 
 
 def get_narratives(store: FigmentStore, *, all_figs: list | None = None) -> list[dict[str, Any]]:

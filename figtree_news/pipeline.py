@@ -46,6 +46,40 @@ def run_pipeline(
         print(f"[pipeline]     - {n['narrative_id'][:8]}: {n.get('title', '')[:60]}")
         print(f"[pipeline]       sources={n.get('sources', [])}  members={len(n.get('members', []))}  frame_shift={n.get('frame_shift', False)}")
 
+    # Phase 2.5: LLM-based clustering evaluation (ground truth)
+    clustering_eval = {}
+    if llm_config and llm_config.enabled:
+        t0 = time.time()
+        print(f"\n[pipeline] Phase 2.5: LLM-based clustering evaluation (ground truth)")
+        from . import evaluate
+        # Get articles for labeling
+        all_figs = store.all()
+        articles = [f for f in all_figs if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()]
+        print(f"[pipeline]   found {len(articles)} articles for labeling")
+        
+        if len(articles) >= 2:
+            print(f"[pipeline]   starting LLM labeling...")
+            client = evaluate.LLMClient(llm_config)
+            # Label 20 random pairs
+            labels = evaluate.label_article_pairs(articles, client, max_pairs=20)
+            print(f"[pipeline]   got {len(labels)} labels")
+            
+            # Evaluate entity-based clustering
+            entity_clusters = lineage_out.get("entity_clusters", [])
+            if entity_clusters:
+                entity_accuracy = evaluate.evaluate_clustering_accuracy(labels, entity_clusters)
+                clustering_eval["entity"] = entity_accuracy
+            
+            # Evaluate hybrid clustering
+            hybrid_clusters = lineage_out.get("hybrid_clusters", [])
+            if hybrid_clusters:
+                hybrid_accuracy = evaluate.evaluate_clustering_accuracy(labels, hybrid_clusters)
+                clustering_eval["hybrid"] = hybrid_accuracy
+            
+            print(f"[pipeline]   clustering evaluation complete ({time.time()-t0:.1f}s)")
+        else:
+            print(f"[pipeline]   not enough articles for evaluation")
+
     # Phase 3: LLM Evaluation
     eval_out = {"evaluated": 0, "corrections_suggested": 0, "corrections_applied": 0}
     if llm_config and llm_config.enabled:

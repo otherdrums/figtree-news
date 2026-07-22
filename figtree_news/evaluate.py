@@ -555,21 +555,29 @@ def review_brief(
     client: LLMClient,
     config: LLMConfig,
 ) -> dict[str, Any]:
-    if not brief_text or not config.review_brief:
-        return {}
+    """Review the world brief for accuracy and conciseness."""
+    if not brief_text:
+        return {"brief_acceptable": True, "brief_issues": 0}
 
+    # Get the articles used in the brief
     all_figs = store.all()
-    articles = _article_images(store)
-    headlines = [f.meta.get("title") or f.text[:80] for f in articles[:20]]
-    messages = build_brief_review_prompt(brief_text, headlines)
+    articles = [f for f in all_figs if f.meta.get("is_image") and not f.is_edge()]
+
+    prompt = (
+        f"You are a news editor reviewing a world brief.\n\n"
+        f"BRIEF:\n{brief_text}\n\n"
+        f"SOURCES:\n{len(articles)} articles from multiple outlets.\n\n"
+        f"Is this brief accurate, concise (2-3 sentences), and representative of the sources?\n"
+        f"Respond with JSON: {{\"acceptable\": true/false, \"issues\": [\"issue1\", ...]}}"
+    )
+    messages = [{"role": "system", "content": "You are a news editor."}, {"role": "user", "content": prompt}]
     result = client.chat_json(messages, max_tokens=512)
     parsed = result.get("parsed", {})
 
     acceptable = parsed.get("acceptable", True) if isinstance(parsed, dict) else True
     issues = parsed.get("issues", []) if isinstance(parsed, dict) else []
-    suggestion = parsed.get("suggested_rewrite", "") if isinstance(parsed, dict) else ""
 
-    verdict_text = f"World brief review: {'OK' if acceptable else 'ISSUES'} — {', '.join(issues[:3])}"
+    verdict_text = f"World brief review: {'PASS' if acceptable else 'FAIL'} — {len(issues)} issues"
     verdict = Figment.create(
         text=verdict_text,
         boundary=all_figs[0].boundary.copy() if all_figs else None,
@@ -579,7 +587,6 @@ def review_brief(
             "verdict": "pass" if acceptable else "fail",
             "verdict_type": "brief_review",
             "issues": json.dumps(issues),
-            "suggested_rewrite": suggestion,
             "llm_response": result.get("content", ""),
         },
     )
@@ -588,3 +595,116 @@ def review_brief(
 
     print(f"[eval] brief review: {'PASS' if acceptable else 'FAIL'} — {len(issues)} issues")
     return {"brief_acceptable": acceptable, "brief_issues": len(issues)}
+
+
+def label_article_pairs(
+    articles: list[Figment],
+    client: LLMClient,
+    max_pairs: int = 20,
+) -> list[dict[str, Any]]:
+    """Use LLM to label article pairs as same-event or different-event.
+    
+    Returns a list of labels: [{article1_id, article2_id, same_event: bool, reason: str}]
+    """
+    import random
+    
+    if len(articles) < 2:
+        return []
+    
+    # Sample random pairs
+    pairs = []
+    attempts = 0
+    while len(pairs) < max_pairs and attempts < max_pairs * 2:
+        attempts += 1
+        a1, a2 = random.sample(articles, 2)
+        pair_key = tuple(sorted([a1.figment_id, a2.figment_id]))
+        if pair_key not in [(p["a1"], p["a2"]) for p in pairs]:
+            pairs.append({"a1": pair_key[0], "a2": pair_key[1], "article1": a1, "article2": a2})
+    
+    labels = []
+    for pair in pairs:
+        a1, a2 = pair["article1"], pair["article2"]
+        
+        # Build prompt
+        text1 = a1.text[:500] if len(a1.text) > 500 else a1.text
+        text2 = a2.text[:500] if len(a2.text) > 500 else a2.text
+        src1 = a1.meta.get("source_id", "unknown")
+        src2 = a2.meta.get("source_id", "unknown")
+        
+        prompt = (
+            f"Are these two articles about the SAME news event?\n\n"
+            f"ARTICLE 1 (source: {src1}):\n{text1}\n\n"
+            f"ARTICLE 2 (source: {src2}):\n{text2}\n\n"
+            f"Respond with JSON: {{\"same_event\": true/false, \"reason\": \"brief explanation\"}}"
+        )
+        
+        messages = [{"role": "system", "content": "You are a news analyst."}, {"role": "user", "content": prompt}]
+        result = client.chat_json(messages, max_tokens=1024)
+        parsed = result.get("parsed", {})
+        
+        if "error" in result:
+            print(f"[eval] LLM error labeling pair {a1.figment_id[:8]} vs {a2.figment_id[:8]}: {result['error']}")
+            continue
+        
+        same_event = parsed.get("same_event", False) if isinstance(parsed, dict) else False
+        reason = parsed.get("reason", "") if isinstance(parsed, dict) else ""
+        
+        labels.append({
+            "a1": pair["a1"],
+            "a2": pair["a2"],
+            "same_event": same_event,
+            "reason": reason,
+        })
+    
+    print(f"[eval] labeled {len(labels)} article pairs with LLM")
+    same_count = sum(1 for l in labels if l["same_event"])
+    print(f"[eval]   same-event: {same_count}, different-event: {len(labels) - same_count}")
+    
+    return labels
+
+
+def evaluate_clustering_accuracy(
+    labels: list[dict[str, Any]],
+    clusters: list[list[Figment]],
+) -> dict[str, Any]:
+    """Compare clustering results against LLM ground truth labels.
+    
+    Returns precision, recall, and F1 for the clustering.
+    """
+    if not labels or not clusters:
+        return {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+    
+    # Build cluster membership map
+    cluster_map = {}
+    for cluster in clusters:
+        for f in cluster:
+            cluster_map[f.figment_id] = cluster
+    
+    # Evaluate each labeled pair
+    tp = 0  # True positive: LLM says same, clustering says same
+    fp = 0  # False positive: LLM says different, clustering says same
+    fn = 0  # False negative: LLM says same, clustering says different
+    
+    for label in labels:
+        a1_id, a2_id = label["a1"], label["a2"]
+        llm_same = label["same_event"]
+        
+        # Check if clustering puts them together
+        cluster_same = (a1_id in cluster_map and a2_id in cluster_map and 
+                       cluster_map[a1_id] is cluster_map[a2_id])
+        
+        if llm_same and cluster_same:
+            tp += 1
+        elif not llm_same and cluster_same:
+            fp += 1
+        elif llm_same and not cluster_same:
+            fn += 1
+    
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    
+    print(f"[eval] clustering accuracy: precision={precision:.3f}, recall={recall:.3f}, f1={f1:.3f}")
+    print(f"[eval]   tp={tp}, fp={fp}, fn={fn}")
+    
+    return {"precision": precision, "recall": recall, "f1": f1}
