@@ -13,7 +13,6 @@ import asyncio
 import json
 import logging
 import os
-import signal
 import sys
 import time
 import warnings
@@ -39,8 +38,9 @@ from ..pipeline import run_pipeline
 from ..query import query as run_query
 from ..search_index import get_index
 
-# Ctrl-C must kill immediately even if a background crawl thread is loading the model.
-signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+# Let uvicorn/asyncio handle SIGINT natively — the crawl's stop_requested
+# flag provides graceful shutdown, and sys.exit(0) from a signal handler
+# does not reliably kill a running asyncio event loop.
 
 _HERE = os.path.dirname(__file__)
 TEMPLATES_DIR = os.path.join(_HERE, "templates")
