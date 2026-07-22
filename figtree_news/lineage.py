@@ -114,8 +114,74 @@ def _cluster(articles: list[Figment]) -> list[list[Figment]]:
     return [g for g in groups.values() if len(g) >= 2]
 
 
+def _cluster_by_boundary(store: FigmentStore, articles: list[Figment], threshold: float = 0.80) -> list[list[Figment]]:
+    """Group articles by boundary vector similarity (cosine >= threshold).
+    
+    Uses the store's ANN search to find similar articles for each article,
+    then groups them using union-find on similarity edges.
+    """
+    import numpy as np
+    
+    by_id = {f.figment_id: f for f in articles}
+    parent = {f.figment_id: f.figment_id for f in articles}
+    similarity_edges = []
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    # For each article, search for similar articles using boundary vector
+    for article in articles:
+        try:
+            # Search store for similar articles (returns list of (figment, distance))
+            hits = store.search(article.boundary, k=20)
+            for hit_fig, distance in hits:
+                if hit_fig.figment_id == article.figment_id:
+                    continue
+                if hit_fig.figment_id not in by_id:
+                    continue
+                # LanceDB returns cosine distance, convert to similarity
+                # distance = 1 - similarity, so similarity = 1 - distance
+                similarity = 1.0 - distance
+                if similarity >= threshold:
+                    union(article.figment_id, hit_fig.figment_id)
+                    similarity_edges.append((article.figment_id[:8], hit_fig.figment_id[:8], similarity))
+        except Exception as e:
+            print(f"[boundary_cluster] search failed for {article.figment_id[:8]}: {e}")
+            continue
+
+    # Group by connected components
+    groups: dict[str, list[Figment]] = {}
+    for fid in parent:
+        if fid in by_id:
+            groups.setdefault(find(fid), []).append(by_id[fid])
+    
+    clusters = [g for g in groups.values() if len(g) >= 2]
+    
+    # Log clustering details
+    if similarity_edges:
+        avg_sim = sum(s for _, _, s in similarity_edges) / len(similarity_edges)
+        print(f"[boundary_cluster] found {len(similarity_edges)} similarity edges (avg={avg_sim:.3f})")
+        print(f"[boundary_cluster] formed {len(clusters)} clusters from {len(articles)} articles")
+        for i, cluster in enumerate(clusters[:5]):
+            sources = sorted({f.meta.get('source_id', '?') for f in cluster})
+            print(f"[boundary_cluster]   cluster[{i}]: {len(cluster)} articles, sources={sources}")
+    
+    return clusters
+
+
 def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]:
     """Recompute lineage figments from the current store. Idempotent.
+    
+    Runs both entity-based and boundary-based clustering in parallel and compares results.
+    Uses boundary-based clustering as the primary approach (better semantic similarity).
     
     max_stories: if > 0, keep only the top N narratives by member count.
     """
@@ -126,7 +192,20 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
             store.delete(f.figment_id)
 
     articles = _articles(store, all_figs=all_figs)
-    clusters = _cluster(articles)
+    
+    # Run both clustering approaches
+    print(f"\n[lineage] Clustering {len(articles)} articles...")
+    entity_clusters = _cluster(articles)
+    boundary_clusters = _cluster_by_boundary(store, articles, threshold=0.80)
+    
+    # Compare results
+    print(f"\n[lineage] Comparison:")
+    print(f"[lineage]   Entity-based:    {len(entity_clusters)} clusters")
+    print(f"[lineage]   Boundary-based:  {len(boundary_clusters)} clusters")
+    
+    # Use boundary-based clustering as primary
+    clusters = boundary_clusters
+    
     figments: list[Figment] = []
     summaries: list[dict[str, Any]] = []
 

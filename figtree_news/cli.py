@@ -8,8 +8,11 @@ result. No news logic leaks into the core library.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import sys
 import time
+from datetime import datetime
 
 import typer
 
@@ -26,6 +29,41 @@ from . import lineage as lineage_mod
 from . import pipeline as pipeline_mod
 
 app = typer.Typer(help="Source-aware news aggregator built on Figtree figments.")
+
+
+def _setup_logging(log_dir: str = "./logs"):
+    """Set up logging to both stdout and a timestamped log file."""
+    os.makedirs(log_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(log_dir, f"figtree_news_{timestamp}.log")
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    
+    # Clear existing handlers
+    root_logger.handlers.clear()
+    
+    # Formatter
+    formatter = logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # File handler
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+    
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+    
+    logging.info(f"Logging to {log_file}")
+    return log_file
 
 
 def _load(model_id: str, db: str, sources: str):
@@ -299,6 +337,7 @@ def serve_cmd(
 
     from .web.serve import create_app
 
+    _setup_logging()
     app_instance = create_app(db=db, sources=sources)
     uvicorn.run(app_instance, host=host, port=port)
 
