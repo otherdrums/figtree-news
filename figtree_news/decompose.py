@@ -55,6 +55,29 @@ class DecompositionEngine:
             self._running = True
             self._task = asyncio.create_task(self._worker_loop())
             print(f"[decompose] Background worker started")
+            
+            # Queue existing articles that need decomposition
+            asyncio.create_task(self._queue_existing_articles())
+    
+    async def _queue_existing_articles(self):
+        """Find and queue existing articles that haven't been decomposed."""
+        try:
+            all_figs = self.store.all()
+            articles = [f for f in all_figs if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()]
+            
+            needs_decomp = [a for a in articles if not a.meta.get("decomposed")]
+            
+            if needs_decomp:
+                print(f"[decompose] Found {len(needs_decomp)} existing articles needing decomposition")
+                for article in needs_decomp:
+                    await self.queue_article(article.figment_id)
+                print(f"[decompose] Queued {len(needs_decomp)} existing articles")
+            else:
+                print(f"[decompose] All existing articles already decomposed")
+        except Exception as exc:
+            print(f"[decompose] Error queueing existing articles: {exc}")
+            import traceback
+            traceback.print_exc()
     
     def stop(self):
         """Stop background decomposition worker."""
