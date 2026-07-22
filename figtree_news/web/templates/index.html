@@ -254,6 +254,42 @@ const WS_URL = `ws://${location.host}/ws`;
 let ws = null;
 let crawlRunning = false;
 
+// Persist crawl settings across page reloads
+const SETTINGS_KEY = 'figtree-news-crawl-settings';
+const SETTING_IDS = ['max-articles', 'max-stories', 'since', 'before', 'compute-kv', 'summarize', 'interval'];
+
+function saveSettings() {
+  const settings = {};
+  SETTING_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    settings[id] = el.type === 'checkbox' ? el.checked : el.value;
+  });
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return;
+    const settings = JSON.parse(raw);
+    SETTING_IDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el || !(id in settings)) return;
+      if (el.type === 'checkbox') el.checked = settings[id];
+      else el.value = settings[id];
+    });
+  } catch (e) {}
+}
+
+// Restore saved settings on load
+loadSettings();
+// Save on any change
+SETTING_IDS.forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', saveSettings);
+});
+
 function connectWS() {
   ws = new WebSocket(WS_URL);
   ws.onmessage = (e) => {
