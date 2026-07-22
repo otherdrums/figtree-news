@@ -478,7 +478,7 @@ fetch('/api/config').then(r => r.json()).then(cfg => {
     Object.entries(cfg.feeds).forEach(([s, u]) => addFeedRow(s, u));
   }
   if (cfg.seeds) cfg.seeds.forEach(u => addSeedRow(u));
-  if (cfg.llm) {
+  if (cfg.llm && !localStorage.getItem(SETTINGS_KEY)) {
     document.getElementById('llm-enabled').checked = cfg.llm.enabled || false;
   }
 }).catch(() => {});

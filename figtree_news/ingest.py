@@ -49,6 +49,8 @@ def _read_feed(uri: str, source_id: str, since: str = "", before: str = "") -> l
     # Parse since/before into comparable datetimes
     _since = _parse_date_param(since) if since else None
     _before = _parse_date_param(before) if before else None
+    if _before and len(before.strip()) <= 10:
+        _before = _before.replace(hour=23, minute=59, second=59)
 
     for entry in getattr(parsed, "entries", []):
         summary = entry.get("summary") or ""

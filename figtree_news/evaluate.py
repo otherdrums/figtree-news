@@ -249,6 +249,40 @@ def _make_fig_id(seed: str) -> str:
     return hashlib.sha256(seed.encode()).hexdigest()[:16]
 
 
+def _upsert_correction(
+    store: FigmentStore,
+    all_figs: list,
+    corr_id: str,
+    corr_text: str,
+    corr_type: str,
+    target_narrative: str,
+    target_article: str,
+    run_id: str,
+    reason: str,
+) -> Figment:
+    """Find existing correction for same target, increment confirmation_count, or create new."""
+    for f in all_figs:
+        if f.figment_id == corr_id:
+            f.meta["confirmation_count"] = f.meta.get("confirmation_count", 1) + 1
+            f.meta["eval_run_id"] = run_id
+            return f
+    return Figment.create(
+        text=corr_text,
+        boundary=all_figs[0].boundary.copy() if all_figs else None,
+        meta={
+            "edge_type": "correction",
+            "correction_type": corr_type,
+            "target_narrative": target_narrative,
+            "target_article": target_article,
+            "eval_run_id": run_id,
+            "reason": reason,
+            "applied": False,
+            "confirmation_count": 1,
+        },
+        figment_id=corr_id,
+    )
+
+
 def _find_partial_run(store: FigmentStore) -> Figment | None:
     for f in store.all():
         if f.meta.get("edge_type") == "evaluation_run" and not f.meta.get("completed", False):
@@ -379,19 +413,9 @@ def evaluate_narratives(
                     f"Remove article {target_article.figment_id[:8]} from narrative {nid[:8]}: {reason}"
                 )
                 corr_id = _make_fig_id(f"corr:{nid}:remove:{target_article.figment_id}")
-                correction = Figment.create(
-                    text=corr_text,
-                    boundary=all_figs[0].boundary.copy() if all_figs else None,
-                    meta={
-                        "edge_type": "correction",
-                        "correction_type": "remove",
-                        "target_narrative": nid,
-                        "target_article": target_article.figment_id,
-                        "eval_run_id": run.figment_id,
-                        "reason": reason,
-                        "applied": False,
-                    },
-                    figment_id=corr_id,
+                correction = _upsert_correction(
+                    store, all_figs, corr_id, corr_text, "remove",
+                    nid, target_article.figment_id, run.figment_id, reason,
                 )
                 verdicts.append(correction)
                 corrections_suggested += 1
@@ -487,19 +511,10 @@ def evaluate_narratives(
                         continue
                     _, singleton_fig = singletons[si]
                     corr_id = _make_fig_id(f"corr:{target_nid}:merge:{singleton_fig.figment_id}")
-                    correction = Figment.create(
-                        text=f"Merge singleton {singleton_fig.figment_id[:8]} into narrative {target_nid[:8]}: {reason}",
-                        boundary=all_figs[0].boundary.copy() if all_figs else None,
-                        meta={
-                            "edge_type": "correction",
-                            "correction_type": "merge",
-                            "target_narrative": target_nid,
-                            "target_article": singleton_fig.figment_id,
-                            "eval_run_id": run.figment_id,
-                            "reason": reason,
-                            "applied": False,
-                        },
-                        figment_id=corr_id,
+                    corr_text = f"Merge singleton {singleton_fig.figment_id[:8]} into narrative {target_nid[:8]}: {reason}"
+                    correction = _upsert_correction(
+                        store, all_figs, corr_id, corr_text, "merge",
+                        target_nid, singleton_fig.figment_id, run.figment_id, reason,
                     )
                     verdicts.append(correction)
                     corrections_suggested += 1

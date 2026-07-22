@@ -38,13 +38,13 @@ def collect_pending_corrections(
 
     confirmed = []
     for (ctype, tnid, taid), corrs in groups.items():
-        unique_runs = len({c.meta.get("eval_run_id") for c in corrs})
-        if unique_runs >= confirmation_threshold:
+        confirmations = max(c.meta.get("confirmation_count", 1) for c in corrs)
+        if confirmations >= confirmation_threshold:
             confirmed.append({
                 "correction_type": ctype,
                 "target_narrative": tnid,
                 "target_article": taid,
-                "confirmations": unique_runs,
+                "confirmations": confirmations,
                 "reason": corrs[0].meta.get("reason", ""),
                 "correction_ids": [c.figment_id for c in corrs],
             })
