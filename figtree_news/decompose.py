@@ -7,6 +7,7 @@ enabling structured search and natural narrative emergence through figment reuse
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from typing import Any
 
@@ -188,13 +189,32 @@ class DecompositionEngine:
         """Use LLM to extract roles from sentence."""
         prompt = ROLE_EXTRACTION_PROMPT.format(sentence=sentence[:500])
         messages = [
-            {"role": "system", "content": "You are a journalistic fact extractor."},
+            {"role": "system", "content": "You are a journalistic fact extractor. Reply ONLY with a JSON object, no thinking tags."},
             {"role": "user", "content": prompt}
         ]
         
         # Run synchronous LLM call in thread to avoid blocking event loop
         result = await asyncio.to_thread(client.chat_json, messages, 512)
-        parsed = result.get('parsed', {})
+        
+        # Try parsed field first (from chat_json)
+        parsed = result.get('parsed')
+        if parsed is None and 'content' in result:
+            # Fallback: try to parse content ourselves, stripping <think>...</think> tags
+            import re
+            text = result['content']
+            text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                # Try extracting first JSON object
+                brace_start = text.find("{")
+                brace_end = text.rfind("}")
+                if brace_start >= 0 and brace_end > brace_start:
+                    try:
+                        parsed = json.loads(text[brace_start:brace_end + 1])
+                    except json.JSONDecodeError:
+                        print(f"[decompose] Failed to parse LLM output: {text[:200]}")
+                        return {}
         
         if not isinstance(parsed, dict):
             return {}
