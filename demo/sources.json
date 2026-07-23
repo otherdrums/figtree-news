@@ -136,13 +136,17 @@
     "url": "http://192.168.10.202:8081",
     "enabled": true,
     "queries": [
-      "Israel Gaza ceasefire",
-      "Ukraine Russia war",
-      "AI regulation"
+      "breaking news today",
+      "technology news",
+      "climate environment news",
+      "economy business markets",
+      "health science research",
+      "politics policy government",
+      "world news today"
     ],
     "categories": "news",
-    "time_range": "week",
-    "max_results": 20,
+    "time_range": "day",
+    "max_results": 10,
     "pages": 1
   }
 }

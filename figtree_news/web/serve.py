@@ -73,6 +73,14 @@ _crawl_state: dict[str, Any] = {
 _ws_connections: list[WebSocket] = []
 
 
+async def _drain_decompose(crawler):
+    """Drain article IDs queued for decomposition during a sync thread call and submit them."""
+    if not _decompose_engine:
+        return
+    for fid in crawler.drain_pending_decompose():
+        asyncio.create_task(_decompose_engine.queue_article(fid))
+
+
 def _get_generator():
     if "gen" not in _gen_cache:
         model, tokenizer = load_model("unsloth/Qwen3-4B-bnb-4bit")
@@ -217,6 +225,7 @@ async def _run_crawl_tick(
                 crawler.crawl_feed, sid, uri, min(per_feed, budget),
                 since=since, before=before,
             )
+            await _drain_decompose(crawler)
             print(f"[crawl] {sid}: +{added} articles")
             stats["feeds_added"] += added
             stats["sources"].add(sid)
@@ -241,7 +250,35 @@ async def _run_crawl_tick(
             _crawl_state["progress"] = 0
             await _broadcast({"type": "crawl_status", "data": _crawl_state})
             added = await asyncio.to_thread(crawler.crawl_seeds, seeds)
+            await _drain_decompose(crawler)
             stats["seeds_added"] += added
+
+        if _crawl_state.get("stop_requested"):
+            raise asyncio.CancelledError("Stop requested")
+
+        # SearXNG web search — independent budget (not consumed by feeds)
+        search_added = 0
+        cfg = registry.searxng
+        if cfg and cfg.enabled and cfg.queries:
+            _crawl_state["current_step"] = "searching"
+            _crawl_state["message"] = f"Searching {len(cfg.queries)} queries..."
+            _crawl_state["total"] = len(cfg.queries)
+            _crawl_state["progress"] = 0
+            await _broadcast({"type": "crawl_status", "data": _crawl_state})
+            for qi, q in enumerate(cfg.queries):
+                if _crawl_state.get("stop_requested"):
+                    break
+                _crawl_state["progress"] = qi
+                _crawl_state["message"] = f"Searching: {q}"
+                await _broadcast({"type": "crawl_status", "data": _crawl_state})
+                got = await asyncio.to_thread(
+                    crawler.search_searxng, q,
+                    categories=cfg.categories, time_range=cfg.time_range,
+                    max_results=cfg.max_results, pages=cfg.pages,
+                )
+                await _drain_decompose(crawler)
+                search_added += got
+            print(f"[crawl] SearXNG: +{search_added} articles across {len(cfg.queries)} queries")
 
         if _crawl_state.get("stop_requested"):
             raise asyncio.CancelledError("Stop requested")
@@ -270,6 +307,7 @@ async def _run_crawl_tick(
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
         stats["sources"] = sorted(stats["sources"])
+        stats["search_added"] = search_added
         stats.update(pipe_stats)
         n_narr = pipe_stats.get("narratives", [])
         n_narr = len(n_narr) if isinstance(n_narr, list) else n_narr

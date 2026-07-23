@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import time
 from functools import lru_cache
 from urllib.parse import urljoin, urlparse
@@ -106,6 +107,8 @@ class Crawler:
         self.kv_manager = kv_manager
         self.decompose_engine = decompose_engine
         self.seen: set[str] = self._load_seen()
+        self._pending_decompose: list[str] = []
+        self._pending_lock = threading.Lock()
 
     # -- URL de-duplication ------------------------------------------------ #
     def _load_seen(self) -> set[str]:
@@ -218,7 +221,8 @@ class Crawler:
             kv_manager=self.kv_manager,
         )
         
-        # Queue for background decomposition
+        # Queue for background decomposition (thread-safe: append to list,
+        # the async caller drains it after to_thread returns)
         if self.decompose_engine and url:
             # Find the article figment we just created
             all_figs = self.store.all()
@@ -226,12 +230,20 @@ class Crawler:
                 if (fig.meta.get("is_image") and 
                     fig.meta.get("source_id") == source_id and
                     fig.meta.get("url") == url):
-                    asyncio.create_task(self.decompose_engine.queue_article(fig.figment_id))
+                    with self._pending_lock:
+                        self._pending_decompose.append(fig.figment_id)
                     break
         
         if url:
             self._mark(url)
         return True
+
+    def drain_pending_decompose(self) -> list[str]:
+        """Return and clear the list of article IDs queued for decomposition (thread-safe)."""
+        with self._pending_lock:
+            ids = list(self._pending_decompose)
+            self._pending_decompose.clear()
+        return ids
 
     def crawl_feed(self, source_id: str, feed_uri: str, max_articles: int | None = None,
                    since: str = "", before: str = "") -> int:
