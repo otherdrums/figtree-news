@@ -25,10 +25,13 @@ class SourceConfig:
 class SourceRegistry:
     """Loads/saves a small JSON map of source_id -> SourceConfig."""
 
-    def __init__(self, sources: dict[str, SourceConfig], feeds: dict[str, str] = None, seeds: list[str] = None):
+    def __init__(self, sources: dict[str, SourceConfig], feeds: dict[str, str] = None,
+                 seeds: list[str] = None, searxng=None):
         self.sources = sources
         self.feeds = feeds or {}
         self.seeds = seeds or []
+        # searxng: SearxngConfig instance (imported lazily to avoid circular deps)
+        self.searxng = searxng
 
     @classmethod
     def load(cls, path: str) -> "SourceRegistry":
@@ -38,9 +41,9 @@ class SourceRegistry:
         except FileNotFoundError:
             return cls({}, {}, [])
         out: dict[str, SourceConfig] = {}
-        # Top-level "feeds"/"seeds"/"llm" keys describe crawling/llm, not sources.
+        # Top-level "feeds"/"seeds"/"llm"/"searxng" keys are not sources.
         for sid, spec in raw.items():
-            if sid in ("feeds", "seeds", "llm") or not isinstance(spec, dict):
+            if sid in ("feeds", "seeds", "llm", "searxng") or not isinstance(spec, dict):
                 continue
             out[sid] = SourceConfig(
                 source_id=sid,
@@ -52,7 +55,10 @@ class SourceRegistry:
             )
         feeds = raw.get("feeds", {}) if isinstance(raw.get("feeds"), dict) else {}
         seeds = raw.get("seeds", []) if isinstance(raw.get("seeds"), list) else []
-        return cls(out, feeds, seeds)
+        # Lazy import to avoid circular dependency
+        from .searxng import SearxngConfig
+        searxng = SearxngConfig.from_sources_json(path)
+        return cls(out, feeds, seeds, searxng)
 
     def save(self, path: str) -> None:
         raw = {
@@ -69,6 +75,18 @@ class SourceRegistry:
             raw["feeds"] = self.feeds
         if self.seeds:
             raw["seeds"] = self.seeds
+        if self.searxng:
+            raw["searxng"] = {
+                "url": self.searxng.url,
+                "enabled": self.searxng.enabled,
+                "queries": self.searxng.queries,
+                "categories": self.searxng.categories,
+                "time_range": self.searxng.time_range,
+                "language": self.searxng.language,
+                "max_results": self.searxng.max_results,
+                "pages": self.searxng.pages,
+                "timeout": self.searxng.timeout,
+            }
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(raw, fh, indent=2)
 

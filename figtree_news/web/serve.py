@@ -561,6 +561,18 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         before = body.get("before", "")
         llm_enabled = body.get("llm_enabled", False)
 
+        # Apply SearXNG overrides from control panel
+        if registry.searxng:
+            sx = registry.searxng
+            if "searxng_enabled" in body:
+                sx.enabled = bool(body["searxng_enabled"])
+            if "searxng_queries" in body:
+                sx.queries = [q.strip() for q in body["searxng_queries"].split("\n") if q.strip()]
+            if "searxng_time_range" in body:
+                sx.time_range = body["searxng_time_range"]
+            if "searxng_categories" in body:
+                sx.categories = body["searxng_categories"]
+
         # Load feeds/seeds from sources.json if not provided
         if not feeds and not seeds:
             try:
@@ -577,7 +589,11 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
                     return {"error": "No feeds configured and could not read sources.json"}
 
         if not feeds and not seeds:
-            return {"error": "No feeds or seeds configured"}
+            # Also check if SearXNG search has queries
+            has_search = (registry.searxng and registry.searxng.enabled
+                          and registry.searxng.queries)
+            if not has_search:
+                return {"error": "No feeds, seeds, or search queries configured"}
 
         _crawl_state["stop_requested"] = False
 
@@ -674,17 +690,22 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
 
     @app.get("/api/config")
     def api_config():
-        """Return feeds/seeds/llm from sources.json for the control panel."""
+        """Return feeds/seeds/llm/searxng from sources.json for the control panel."""
         llm_config = LLMConfig.from_sources_json(sources)
-        return {
-            "feeds": registry.feeds,
-            "seeds": registry.seeds,
-            "llm": {
-                "url": llm_config.url,
-                "model": llm_config.model,
-                "enabled": llm_config.enabled,
-            },
-        }
+        cfg = {"feeds": registry.feeds, "seeds": registry.seeds, "llm": {
+            "url": llm_config.url, "model": llm_config.model, "enabled": llm_config.enabled,
+        }}
+        if registry.searxng:
+            cfg["searxng"] = {
+                "url": registry.searxng.url,
+                "enabled": registry.searxng.enabled,
+                "queries": registry.searxng.queries,
+                "categories": registry.searxng.categories,
+                "time_range": registry.searxng.time_range,
+                "max_results": registry.searxng.max_results,
+                "pages": registry.searxng.pages,
+            }
+        return cfg
 
     @app.get("/api/search")
     def api_search(q: str = "", range: str = "all", sort: str = "date_desc", page: int = 1, limit: int = 20):

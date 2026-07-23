@@ -295,12 +295,62 @@ class Crawler:
                         queue.append((link, depth + 1))
         return added
 
+    # -- SearXNG web search -------------------------------------------------- #
+    def search_searxng(
+        self, query: str, categories: str = "news", time_range: str = "week",
+        max_results: int = 20, pages: int = 1,
+    ) -> int:
+        """Search SearXNG, fetch full text via trafilatura, ingest.
+
+        Returns the number of articles successfully added.
+        """
+        from .searxng import search as searxng_search, results_to_articles, SearxngConfig
+
+        cfg = self.registry.searxng
+        if not cfg or not cfg.enabled:
+            return 0
+
+        all_results: list[dict] = []
+        for page in range(1, pages + 1):
+            results = searxng_search(cfg, query, pageno=page,
+                                     categories=categories, time_range=time_range)
+            all_results.extend(results)
+            if len(all_results) >= max_results:
+                break
+
+        articles = results_to_articles(all_results[:max_results])
+        added = 0
+        for article in articles:
+            # Auto-register unknown domain as a source
+            sid = article.get("source_id", "")
+            if sid:
+                self.registry.ensure(sid, name=sid, base_trust=0.7)
+            # Fetch full article text via trafilatura (replaces snippet)
+            url = article["url"]
+            full = self.fetch_page(url)
+            if full and full.get("text") and len(full["text"].strip()) >= 40:
+                article["text"] = full["text"]
+                if full.get("title"):
+                    article["title"] = full["title"]
+                if full.get("image_url"):
+                    article["image_url"] = full["image_url"]
+                if full.get("author"):
+                    article["author"] = full["author"]
+                if full.get("published"):
+                    article["published"] = full["published"]
+            # ingest_article handles URL dedup + title dedup + full ingestion
+            if self.ingest_article(sid or _domain(url), article):
+                added += 1
+        if added:
+            print(f"[crawler] search '{query}': {added} articles ingested")
+        return added
+
     # -- orchestration ----------------------------------------------------- #
     def run_once(
         self, feeds: dict[str, str], seeds: list[str], max_articles: int | None = None,
         since: str = "", before: str = "",
     ) -> dict:
-        stats = {"feeds_added": 0, "seeds_added": 0, "sources": set()}
+        stats = {"feeds_added": 0, "seeds_added": 0, "search_added": 0, "sources": set()}
         # Spread the budget across feeds so no single source dominates a run.
         per = None
         if max_articles is not None and feeds:
@@ -315,7 +365,24 @@ class Crawler:
                 budget -= got
             stats["sources"].add(sid)
         if seeds and (budget is None or budget > 0):
-            stats["seeds_added"] = self.crawl_seeds(seeds)
+            got = self.crawl_seeds(seeds)
+            stats["seeds_added"] = got
+            if budget is not None:
+                budget -= got
+        # SearXNG web search — shares the same budget
+        cfg = self.registry.searxng
+        if cfg and cfg.enabled and cfg.queries:
+            per_q = max(1, budget // len(cfg.queries)) if budget else cfg.max_results
+            for q in cfg.queries:
+                if budget is not None and budget <= 0:
+                    break
+                got = self.search_searxng(
+                    q, categories=cfg.categories, time_range=cfg.time_range,
+                    max_results=per_q, pages=cfg.pages,
+                )
+                stats["search_added"] += got
+                if budget is not None:
+                    budget -= got
         stats["sources"] = sorted(stats["sources"])
         return stats
 

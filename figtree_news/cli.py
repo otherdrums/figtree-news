@@ -205,6 +205,44 @@ def crawl_cmd(
         tick()
 
 
+@app.command("search")
+def search_cmd(
+    query: str = typer.Argument(..., help="Search query"),
+    db: str = typer.Option("./news.lance"),
+    sources: str = typer.Option("./sources.json"),
+    model_id: str = typer.Option("unsloth/Qwen3-4B-bnb-4bit"),
+    max_results: int = typer.Option(20, "--max", help="Max results per query"),
+    pages: int = typer.Option(1, "--pages", help="Number of result pages"),
+    time_range: str = typer.Option("", "--time-range", help="day|week|month|year|''"),
+    categories: str = typer.Option("news", "--categories", help="SearXNG categories"),
+    seen_path: str = typer.Option("./seen_urls.json"),
+):
+    """Search the web via SearXNG and ingest articles."""
+    from .searxng import SearxngConfig
+    model, tokenizer, store, registry = _load(model_id, db, sources)
+    # Override searxng config from CLI args
+    if registry.searxng:
+        registry.searxng.enabled = True
+        registry.searxng.queries = [query]
+        if time_range:
+            registry.searxng.time_range = time_range
+        if categories:
+            registry.searxng.categories = categories
+    else:
+        registry.searxng = SearxngConfig(
+            enabled=True, queries=[query], time_range=time_range,
+            categories=categories, max_results=max_results, pages=pages,
+        )
+    crawler = crawler_mod.Crawler(
+        model, tokenizer, store, registry, seen_path=seen_path,
+    )
+    added = crawler.search_searxng(
+        query, categories=categories, time_range=time_range,
+        max_results=max_results, pages=pages,
+    )
+    typer.echo(json.dumps({"query": query, "articles_added": added}, indent=2))
+
+
 @app.command("update-trust")
 def update_trust_cmd(
     db: str = typer.Option("./news.lance"),

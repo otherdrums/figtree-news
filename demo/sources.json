@@ -131,5 +131,18 @@
     "france24_yt": "https://www.youtube.com/feeds/videos.xml?channel_id=UCQfwfsi5VrQ8yKZ-UWmAEFg",
     "pbsnewshour": "https://www.youtube.com/feeds/videos.xml?channel_id=UC6ZFN9Tx6xh-skXCuRHCDpQ"
   },
-  "seeds": []
+  "seeds": [],
+  "searxng": {
+    "url": "http://192.168.10.202:8081",
+    "enabled": true,
+    "queries": [
+      "Israel Gaza ceasefire",
+      "Ukraine Russia war",
+      "AI regulation"
+    ],
+    "categories": "news",
+    "time_range": "week",
+    "max_results": 20,
+    "pages": 1
+  }
 }

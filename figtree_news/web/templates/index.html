@@ -233,6 +233,37 @@
   </div>
 
   <div class="control-card">
+    <h3>Web Search (SearXNG)</h3>
+    <div class="form-group">
+      <label>
+        <input type="checkbox" id="searxng-enabled" checked> Enable web search
+      </label>
+    </div>
+    <div class="form-group">
+      <label for="searxng-time-range">Time range</label>
+      <select id="searxng-time-range">
+        <option value="day">Last day</option>
+        <option value="week" selected>Last week</option>
+        <option value="month">Last month</option>
+        <option value="year">Last year</option>
+        <option value="">Any time</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="searxng-categories">Categories</label>
+      <select id="searxng-categories">
+        <option value="news" selected>News</option>
+        <option value="general">General</option>
+        <option value="general,news">General + News</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="searxng-queries">Search queries (one per line)</label>
+      <textarea id="searxng-queries" rows="5" placeholder="Israel Gaza ceasefire&#10;Ukraine Russia war&#10;AI regulation"></textarea>
+    </div>
+  </div>
+
+  <div class="control-card">
     <h3>Actions</h3>
     <button class="btn btn-primary" id="btn-crawl-once" onclick="runCrawl(false)">Run Once</button>
     <button class="btn btn-primary" id="btn-crawl-continuous" onclick="runCrawl(true)">Start Continuous</button>
@@ -261,7 +292,7 @@ let crawlRunning = false;
 
 // Persist crawl settings across page reloads
 const SETTINGS_KEY = 'figtree-news-crawl-settings';
-const SETTING_IDS = ['max-articles', 'max-stories', 'since', 'before', 'compute-kv', 'summarize', 'interval', 'llm-enabled'];
+const SETTING_IDS = ['max-articles', 'max-stories', 'since', 'before', 'compute-kv', 'summarize', 'interval', 'llm-enabled', 'searxng-enabled', 'searxng-time-range', 'searxng-categories', 'searxng-queries'];
 
 function saveSettings() {
   const settings = {};
@@ -412,6 +443,10 @@ async function runCrawl(continuous) {
     continuous: continuous,
     interval: parseInt(document.getElementById('interval').value),
     llm_enabled: document.getElementById('llm-enabled').checked,
+    searxng_enabled: document.getElementById('searxng-enabled').checked,
+    searxng_time_range: document.getElementById('searxng-time-range').value,
+    searxng_categories: document.getElementById('searxng-categories').value,
+    searxng_queries: document.getElementById('searxng-queries').value,
   };
   try {
     const resp = await fetch('/api/crawl/run', {
@@ -480,6 +515,12 @@ fetch('/api/config').then(r => r.json()).then(cfg => {
   if (cfg.seeds) cfg.seeds.forEach(u => addSeedRow(u));
   if (cfg.llm && !localStorage.getItem(SETTINGS_KEY)) {
     document.getElementById('llm-enabled').checked = cfg.llm.enabled || false;
+  }
+  if (cfg.searxng && !localStorage.getItem(SETTINGS_KEY)) {
+    document.getElementById('searxng-enabled').checked = cfg.searxng.enabled !== false;
+    document.getElementById('searxng-time-range').value = cfg.searxng.time_range || 'week';
+    document.getElementById('searxng-categories').value = cfg.searxng.categories || 'news';
+    document.getElementById('searxng-queries').value = (cfg.searxng.queries || []).join('\n');
   }
 }).catch(() => {});
 </script>
