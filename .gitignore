@@ -22,3 +22,6 @@ seen_urls.json
 # IDE
 .idea/
 .vscode/
+
+# Logs
+logs/

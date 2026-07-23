@@ -16,13 +16,13 @@ def _seed(tmp_path):
     a = Figment.create(
         text="The Election was held on Tuesday.", boundary=np.zeros(8, dtype="float32"),
         meta={"source_id": "reuters", "is_image": True, "url": "http://reuters.com/1",
-              "published": "Mon, 01 Jan 2024 10:00:00 GMT", "title": "Election day"},
+              "published": "Mon, 01 Jan 2024 10:00:00 GMT", "title": "France Election Results"},
         figment_id="a1", trust=0.9,
     )
     b = Figment.create(
         text="The Election results were announced.", boundary=np.zeros(8, dtype="float32"),
         meta={"source_id": "blog", "is_image": True, "url": "http://blog.com/1",
-              "published": "Tue, 02 Jan 2024 10:00:00 GMT", "title": "Results"},
+              "published": "Tue, 02 Jan 2024 10:00:00 GMT", "title": "France Election Results Announced"},
         figment_id="b1", trust=0.5,
     )
     store.upsert([a, b], hidden_size=8)
