@@ -382,7 +382,8 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     llm_config = LLMConfig.from_sources_json(sources)
     global _decompose_engine, _cogitate_engine
     
-    if llm_config.enabled and llm_config.url:
+    # Always create engines if LLM URL is configured (enabled/disabled is a UI toggle)
+    if llm_config.url:
         from ..decompose import DecompositionEngine
         from ..cogitate import CogitationEngine
         

@@ -121,7 +121,7 @@ def run_pipeline(
 
     # Phase 8: Queue articles for decomposition (background processing)
     decompose_out = {"queued": 0}
-    if llm_config and llm_config.enabled and llm_config.url:
+    if llm_config and llm_config.url:
         t0 = time.time()
         print(f"\n[pipeline] Phase 8: Queue articles for decomposition (background)")
         
