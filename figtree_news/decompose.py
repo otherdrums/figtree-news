@@ -251,7 +251,7 @@ class DecompositionEngine:
         parent = self.store.get(parent_sentence)
         boundary = parent.boundary.copy() if parent else None
         
-        if not boundary:
+        if boundary is None:
             # Fallback: zero boundary
             import numpy as np
             boundary = np.zeros(2560, dtype=np.float32)
