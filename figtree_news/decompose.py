@@ -157,6 +157,7 @@ class DecompositionEngine:
                 continue
             
             # Create or reuse role figments
+            sentence_role_ids = []
             for role in ROLES:
                 text = roles.get(role, '').strip()
                 if not text:
@@ -168,12 +169,14 @@ class DecompositionEngine:
                     parent_sentence=sentence.figment_id,
                     article_id=article_id
                 )
-                role_figment_ids.append(figment.figment_id)
+                sentence_role_ids.append(figment.figment_id)
             
-            # Mark sentence as decomposed
-            sentence.meta['decomposed'] = True
-            sentence.children.extend([fid for fid in role_figment_ids if fid not in sentence.children])
-            self.store.upsert([sentence], hidden_size=sentence.boundary.shape[0])
+            # Only mark decomposed if we actually created role figments
+            if sentence_role_ids:
+                sentence.meta['decomposed'] = True
+                sentence.children.extend([fid for fid in sentence_role_ids if fid not in sentence.children])
+                self.store.upsert([sentence], hidden_size=sentence.boundary.shape[0])
+                role_figment_ids.extend(sentence_role_ids)
         
         # Update article with role figment references
         if role_figment_ids:
