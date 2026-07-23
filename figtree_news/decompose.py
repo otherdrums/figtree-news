@@ -186,7 +186,8 @@ class DecompositionEngine:
             {"role": "user", "content": prompt}
         ]
         
-        result = client.chat_json(messages, max_tokens=512)
+        # Run synchronous LLM call in thread to avoid blocking event loop
+        result = await asyncio.to_thread(client.chat_json, messages, 512)
         parsed = result.get('parsed', {})
         
         if not isinstance(parsed, dict):
