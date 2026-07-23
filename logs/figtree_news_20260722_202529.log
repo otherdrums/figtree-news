@@ -1,0 +1,7 @@
+2026-07-22 20:25:29 [INFO] Logging to ./logs/figtree_news_20260722_202529.log
+2026-07-22 20:28:08 [INFO] HTTP Request: POST http://192.168.10.222:8081/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-22 20:28:49 [INFO] HTTP Request: POST http://192.168.10.222:8081/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-22 20:29:29 [INFO] HTTP Request: POST http://192.168.10.222:8081/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-22 20:30:09 [INFO] HTTP Request: POST http://192.168.10.222:8081/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-22 20:30:50 [INFO] HTTP Request: POST http://192.168.10.222:8081/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-22 20:31:31 [INFO] HTTP Request: POST http://192.168.10.222:8081/v1/chat/completions "HTTP/1.1 200 OK"

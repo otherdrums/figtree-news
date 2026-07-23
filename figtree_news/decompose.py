@@ -110,6 +110,7 @@ class DecompositionEngine:
             try:
                 # Get next item from queue (blocks until available)
                 article_id = await self.queue.get()
+                print(f"[decompose-{worker_id}] Picked up article {article_id[:8]}, queue={self.queue.qsize()}")
                 
                 # Process immediately - no artificial delays
                 await self._decompose_article(article_id, client)
@@ -132,6 +133,7 @@ class DecompositionEngine:
         """Extract WHO/WHAT/WHERE/WHEN/WHY/HOW from article sentences."""
         article = self.store.get(article_id)
         if not article:
+            print(f"[decompose] Article {article_id[:8]} not found in store, skipping")
             return
         
         # Get sentence children
@@ -139,6 +141,7 @@ class DecompositionEngine:
         sentences = [s for s in sentences if s and not s.is_edge()]
         
         if not sentences:
+            print(f"[decompose] Article {article_id[:8]} has no sentences, skipping")
             return
         
         role_figment_ids = []
