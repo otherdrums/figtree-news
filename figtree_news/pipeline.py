@@ -64,18 +64,6 @@ def run_pipeline(
             labels = evaluate.label_article_pairs(articles, client, max_pairs=20)
             print(f"[pipeline]   got {len(labels)} labels")
             
-            # Evaluate entity-based clustering
-            entity_clusters = lineage_out.get("entity_clusters", [])
-            if entity_clusters:
-                entity_accuracy = evaluate.evaluate_clustering_accuracy(labels, entity_clusters)
-                clustering_eval["entity"] = entity_accuracy
-            
-            # Evaluate hybrid clustering
-            hybrid_clusters = lineage_out.get("hybrid_clusters", [])
-            if hybrid_clusters:
-                hybrid_accuracy = evaluate.evaluate_clustering_accuracy(labels, hybrid_clusters)
-                clustering_eval["hybrid"] = hybrid_accuracy
-            
             print(f"[pipeline]   clustering evaluation complete ({time.time()-t0:.1f}s)")
         else:
             print(f"[pipeline]   not enough articles for evaluation")

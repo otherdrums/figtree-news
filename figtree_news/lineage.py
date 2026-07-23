@@ -26,24 +26,31 @@ from figtree import Figment, FigmentStore, Figtree
 
 _ENTITY_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*|[A-Z]{2,})\b")
 _STOP = {
+    # Articles / determiners / pronouns
     "The", "This", "That", "These", "Those", "We", "They", "He", "She", "It",
+    # Days / months (low-signal for clustering)
     "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
     "January", "February", "March", "April", "May", "June", "July", "August",
-    "September", "October", "November", "December", "Reuters", "AP", "BBC",
-    "Guardian", "NPR", "Aljazeera", "CNN", "NYT", "New York Times",
-    "United States", "US", "USA", "U.S.", "U.S.A.", "America", "American",
-    "United Kingdom", "UK", "U.K.", "Britain", "British", "England",
-    "Canada", "Australian", "China", "Chinese",
-    "Russia", "Russian", "Ukraine", "Ukrainian", "Iran", "Iranian",
-    "Israel", "Israeli", "Palestinian", "Palestine", "Gaza", "Hamas",
+    "September", "October", "November", "December",
+    # Source names (not entities)
+    "Reuters", "AP", "BBC", "Guardian", "NPR", "Aljazeera", "CNN", "NYT",
+    "New", "York", "Times",
+    # Generic news verbs / roles (not unique entities)
     "President", "Prime", "Minister", "Government", "Official",
     "World", "News", "Report", "Story", "Article", "People", "Some", "Amid",
     "After", "Before", "During", "Following", "Because", "Despite",
     "About", "Over", "Under", "Between", "Against", "Through", "Into",
-    "According", "Said", "Says", "Told", "New", "Old", "First", "Last",
+    "According", "Said", "Says", "Told", "Old", "First", "Last",
     "More", "Most", "Many", "Much", "Several", "One", "Two", "Three",
-    "South", "North", "East", "West",
     "Watch", "Video", "Live", "Updated", "Breaking",
+    # Generic directions
+    "South", "North", "East", "West",
+    # Common verbs/adjectives that get capitalized in headlines
+    "Hits", "Slams", "Blasts", "Hails", "Urges", "Calls", "Makes",
+    "Gets", "Set", "May", "Could", "Would", "Should", "Will",
+    "Reportedly", "Allegedly",
+    # Question words / sentence starters that get extracted as entities
+    "Who", "What", "Where", "When", "Why", "How", "Which",
 }
 
 
@@ -51,7 +58,43 @@ def _entities(text: str) -> set[str]:
     if not text:
         return set()
     toks = {t.strip(".") for t in _ENTITY_RE.findall(text)}
-    return {t for t in toks if t not in _STOP and len(t) > 2}
+    result = set()
+    for t in toks:
+        if len(t) < 3:
+            continue
+        # Only filter single-word entities against stop list
+        if " " not in t and t in _STOP:
+            continue
+        result.add(t)
+        # For multi-word entities, also add individual words as entities
+        # This helps match "Saudi Arabia" with "Saudi" across different headlines
+        if " " in t:
+            for word in t.split():
+                if len(word) >= 3 and word not in _STOP:
+                    result.add(word)
+    return result
+
+
+def _normalize_source(source_id: str) -> str:
+    """Collapse same-org feed variants (e.g. france24 + france24_yt -> france24)."""
+    # Strip _yt/_rss/_tw suffixes that mark different feed types from the same org
+    for suffix in ("_yt", "_rss", "_tw", "_fb"):
+        if source_id.endswith(suffix):
+            return source_id[: -len(suffix)]
+    return source_id
+
+
+def _article_entities(art: Figment) -> set[str]:
+    """Extract entities from title, falling back to text.
+    
+    Prefer title because it's more specific per-article. Body text tends
+    to contain generic entities (country names, common figures) that cause
+    over-clustering.
+    """
+    title = art.meta.get("title", "")
+    if title:
+        return _entities(title)
+    return _entities(art.text)
 
 
 def _parse_time(fig: Figment) -> datetime | None:
@@ -79,10 +122,18 @@ def _articles(store: FigmentStore, *, all_figs: list | None = None) -> list[Figm
     ]
 
 
-def _cluster(articles: list[Figment]) -> list[list[Figment]]:
-    """Group articles by Jaccard entity overlap (>= 0.25) instead of single shared entity."""
+def _cluster(articles: list[Figment], min_shared: int = 2, min_jaccard: float = 0.30) -> list[list[Figment]]:
+    """Group articles by entity overlap using inverted index.
+    
+    Uses a combined check: articles must share >= min_shared entities AND
+    have >= min_jaccard Jaccard similarity. This prevents mega-clusters from
+    single shared generic terms (Jaccard requirement) while allowing articles
+    with very similar entity sets to cluster even if small (shared count).
+    
+    Uses an inverted index for O(n * avg_entities) instead of O(n²).
+    """
     by_id = {f.figment_id: f for f in articles}
-    ent_sets = {f.figment_id: _entities(f.text) for f in articles}
+    ent_sets = {f.figment_id: _article_entities(f) for f in articles}
     parent = {f.figment_id: f.figment_id for f in articles}
 
     def find(x):
@@ -102,11 +153,28 @@ def _cluster(articles: list[Figment]) -> list[list[Figment]]:
         union_len = len(sa | sb)
         return inter / union_len if union_len else 0.0
 
-    fids = list(ent_sets.keys())
-    for i in range(len(fids)):
-        for j in range(i + 1, len(fids)):
-            if jaccard(fids[i], fids[j]) >= 0.25:
-                union(fids[i], fids[j])
+    # Build inverted index: entity -> set of article IDs
+    inv_index: dict[str, set[str]] = {}
+    for fid, ents in ent_sets.items():
+        for ent in ents:
+            inv_index.setdefault(ent, set()).add(fid)
+
+    # For each article, find candidates via shared entities, then check both
+    checked: set[tuple[str, str]] = set()
+    for fid, ents in ent_sets.items():
+        candidates: set[str] = set()
+        for ent in ents:
+            candidates |= inv_index.get(ent, set())
+        candidates.discard(fid)
+        
+        for cand in candidates:
+            pair = tuple(sorted([fid, cand]))
+            if pair in checked:
+                continue
+            checked.add(pair)
+            shared = len(ent_sets[fid] & ent_sets[cand])
+            if shared >= min_shared and jaccard(fid, cand) >= min_jaccard:
+                union(fid, cand)
 
     groups: dict[str, list[Figment]] = {}
     for fid in parent:
@@ -177,18 +245,18 @@ def _cluster_by_boundary(store: FigmentStore, articles: list[Figment], threshold
         print(f"[boundary_cluster] found {len(similarity_edges)} similarity edges (avg={avg_sim:.3f})")
         print(f"[boundary_cluster] formed {len(clusters)} clusters from {len(articles)} articles")
         for i, cluster in enumerate(clusters[:5]):
-            sources = sorted({f.meta.get('source_id', '?') for f in cluster})
+            sources = sorted({_normalize_source(f.meta.get('source_id', '?')) for f in cluster})
             print(f"[boundary_cluster]   cluster[{i}]: {len(cluster)} articles, sources={sources}")
     
     return clusters
 
 
 def _cluster_hybrid(store: FigmentStore, articles: list[Figment], 
-                   entity_threshold: float = 0.20, boundary_threshold: float = 0.60) -> list[list[Figment]]:
+                   entity_threshold: float = 0.08, boundary_threshold: float = 0.45) -> list[list[Figment]]:
     """Hybrid clustering: combine entity overlap AND boundary similarity.
     
     Two articles are clustered if they have BOTH:
-    - Entity Jaccard overlap >= entity_threshold
+    - Entity Jaccard overlap >= entity_threshold (using title+text)
     - Boundary cosine similarity >= boundary_threshold
     
     This combines the strengths of both approaches.
@@ -196,7 +264,7 @@ def _cluster_hybrid(store: FigmentStore, articles: list[Figment],
     import numpy as np
     
     by_id = {f.figment_id: f for f in articles}
-    ent_sets = {f.figment_id: _entities(f.text) for f in articles}
+    ent_sets = {f.figment_id: _article_entities(f) for f in articles}
     parent = {f.figment_id: f.figment_id for f in articles}
     similarity_edges = []
 
@@ -225,7 +293,7 @@ def _cluster_hybrid(store: FigmentStore, articles: list[Figment],
     for i, article in enumerate(articles):
         # Search for similar articles by boundary
         try:
-            hits = store.search(article.boundary, k=20)
+            hits = store.search(article.boundary, k=30)
             for hit_fig, distance in hits:
                 if hit_fig.figment_id == article.figment_id:
                     continue
@@ -265,9 +333,9 @@ def _cluster_hybrid(store: FigmentStore, articles: list[Figment],
         avg_boundary = sum(b for _, _, _, b in similarity_edges) / len(similarity_edges)
         print(f"[hybrid_cluster] found {len(similarity_edges)} matches (avg entity={avg_entity:.3f}, avg boundary={avg_boundary:.3f})")
         print(f"[hybrid_cluster] formed {len(clusters)} clusters from {len(articles)} articles")
-        for i, cluster in enumerate(clusters[:5]):
-            sources = sorted({f.meta.get('source_id', '?') for f in cluster})
-            print(f"[hybrid_cluster]   cluster[{i}]: {len(cluster)} articles, sources={sources}")
+        for i, cluster in enumerate(clusters[:10]):
+            srcs = sorted({_normalize_source(f.meta.get('source_id', '?')) for f in cluster})
+            print(f"[hybrid_cluster]   cluster[{i}]: {len(cluster)} articles, {len(srcs)} sources: {srcs}")
     
     return clusters
 
@@ -296,8 +364,8 @@ def _compute_sentence_boundary_similarity(article1: Figment, article2: Figment) 
 def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]:
     """Recompute lineage figments from the current store. Idempotent.
     
-    Runs entity-based, boundary-based, and hybrid clustering in parallel and compares results.
-    Uses hybrid clustering as the primary approach (best of both worlds).
+    Uses entity-based clustering (fast inverted index) as primary.
+    Boundary search only used within clusters for frame shift detection.
     
     max_stories: if > 0, keep only the top N narratives by member count.
     """
@@ -309,20 +377,13 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
 
     articles = _articles(store, all_figs=all_figs)
     
-    # Run all clustering approaches
+    # Entity-based clustering (fast: inverted index, O(n * avg_entities))
     print(f"\n[lineage] Clustering {len(articles)} articles...")
     entity_clusters = _cluster(articles)
-    boundary_clusters = _cluster_by_boundary(store, articles, threshold=0.80)
-    hybrid_clusters = _cluster_hybrid(store, articles, entity_threshold=0.15, boundary_threshold=0.50)
+    print(f"[lineage]   Entity-based: {len(entity_clusters)} clusters")
     
-    # Compare results
-    print(f"\n[lineage] Comparison:")
-    print(f"[lineage]   Entity-based:    {len(entity_clusters)} clusters")
-    print(f"[lineage]   Boundary-based:  {len(boundary_clusters)} clusters (threshold=0.80)")
-    print(f"[lineage]   Hybrid:          {len(hybrid_clusters)} clusters (entity>=0.20, boundary>=0.60)")
-    
-    # Use hybrid clustering as primary
-    clusters = hybrid_clusters if hybrid_clusters else entity_clusters
+    # Use entity clustering as primary
+    clusters = entity_clusters
     
     figments: list[Figment] = []
     summaries: list[dict[str, Any]] = []
@@ -337,7 +398,7 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
         times = [(f, _parse_time(f)) for f in group]
         first = min(times, key=lambda ft: ft[1] or datetime.max.replace(tzinfo=timezone.utc))[0]
         members = [f.figment_id for f in group]
-        sources = sorted({f.meta.get("source_id") for f in group})
+        sources = sorted({_normalize_source(f.meta.get("source_id")) for f in group})
         key = hashlib.sha1("|".join(members).encode()).hexdigest()[:12]
         narrative_id = f"narrative:{key}"
 
@@ -395,7 +456,7 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
                 "first_reporter": first.figment_id,
                 "first_reporter_source": first.meta.get("source_id"),
                 "first_reporter_url": first.meta.get("url"),
-                "entities": sorted(set().union(*[_entities(f.text) for f in group]))[:12],
+                "entities": sorted(set().union(*[_article_entities(f) for f in group]))[:12],
                 "frame_shift": frame_shift,
                 "frame_shift_score": frame_shift_score,
                 "frame_shift_note": (
@@ -429,8 +490,6 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
     return {
         "narratives": summaries, 
         "edges": len(figments) - len(summaries),
-        "entity_clusters": entity_clusters,
-        "hybrid_clusters": hybrid_clusters,
     }
 
 
@@ -481,13 +540,14 @@ def source_agenda(store: FigmentStore, *, all_figs: list | None = None) -> dict[
     led = {}
     echoed = {}
     for n in narrs:
-        fr = n["first_reporter"]
+        fr = _normalize_source(n["first_reporter"])
         led.setdefault(fr, 0)
         led[fr] += 1
         for s in n["sources"]:
-            if s != fr:
-                echoed.setdefault(s, 0)
-                echoed[s] += 1
+            ns = _normalize_source(s)
+            if ns != fr:
+                echoed.setdefault(ns, 0)
+                echoed[ns] += 1
     agenda = {}
     for src, info in analysis.items():
         agenda[src] = {
