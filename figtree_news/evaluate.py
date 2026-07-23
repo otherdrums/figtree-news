@@ -11,6 +11,7 @@ The evaluation loop is resumable: it tracks ``evaluation_run`` figments with
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
@@ -37,6 +38,7 @@ class LLMClient:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         for attempt in range(3):
             try:
@@ -45,6 +47,9 @@ class LLMClient:
                     resp.raise_for_status()
                     data = resp.json()
                     content = data["choices"][0]["message"]["content"]
+                    # Qwen3 puts response in reasoning_content when thinking is enabled
+                    if not content:
+                        content = data["choices"][0]["message"].get("reasoning_content", "")
                     return {"content": content, "raw": data}
             except Exception as exc:
                 if attempt == 2:
@@ -57,6 +62,8 @@ class LLMClient:
         if "error" in result:
             return result
         text = result["content"].strip()
+        # Strip <think>...</think> tags from Qwen3 models
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
         if text.startswith("```"):
             lines = text.split("\n")
             if lines[0].startswith("```"):
