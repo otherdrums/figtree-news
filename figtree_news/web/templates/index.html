@@ -220,7 +220,12 @@
 
   <div class="control-card">
     <h3>Feeds &amp; Seeds</h3>
-    <div id="feeds-list" class="feed-list"></div>
+    <div id="feeds-list" class="feed-list">
+      <div class="feed-row"><input type="text" class="feed-source" placeholder="source" value="bbc"><input type="url" class="feed-url" placeholder="Feed URL" value="http://feeds.bbci.co.uk/news/rss.xml"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button></div>
+      <div class="feed-row"><input type="text" class="feed-source" placeholder="source" value="aljazeera"><input type="url" class="feed-url" placeholder="Feed URL" value="https://www.aljazeera.com/xml/rss/all.xml"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button></div>
+      <div class="feed-row"><input type="text" class="feed-source" placeholder="source" value="npr"><input type="url" class="feed-url" placeholder="Feed URL" value="https://feeds.npr.org/1001/rss.xml"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button></div>
+      <div class="feed-row"><input type="text" class="feed-source" placeholder="source" value="guardian"><input type="url" class="feed-url" placeholder="Feed URL" value="https://www.theguardian.com/world/rss"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button></div>
+    </div>
     <button class="btn btn-sm btn-secondary" onclick="addFeedRow()">+ Add Feed</button>
     <div id="seeds-list" class="feed-list"></div>
     <button class="btn btn-sm btn-secondary" onclick="addSeedRow()">+ Add Seed</button>
@@ -446,8 +451,7 @@ SETTING_IDS.forEach(function(id) {
   var el = document.getElementById(id);
   if (el) el.addEventListener('change', saveSettings);
 });
-// Always show defaults first, then override from server config
-Object.entries(DEFAULT_FEEDS).forEach(function(entry) { addFeedRow(entry[0], entry[1]); });
+// Override with server config if available
 fetch('/api/config').then(function(r) { return r.json(); }).then(function(cfg) {
   if (cfg.feeds && Object.keys(cfg.feeds).length) {
     document.getElementById('feeds-list').innerHTML = '';
@@ -461,8 +465,8 @@ fetch('/api/config').then(function(r) { return r.json(); }).then(function(cfg) {
     var s = cfg.searxng;
     var el;
     el = document.getElementById('searxng-enabled'); if (el) el.checked = s.enabled !== false;
-    el = document.getElementById('searxng-time-range'); if (el) el.value = s.time_range || 'last_week';
-    el = document.getElementById('searxng-categories'); if (el) el.value = s.categories || 'news';
+    el = document.getElementById('searxng-time-range'); if (el && s.time_range) el.value = s.time_range;
+    el = document.getElementById('searxng-categories'); if (el && s.categories) el.value = s.categories;
     el = document.getElementById('searxng-queries'); if (el && s.queries) el.value = s.queries.join('\n');
   }
 }).catch(function() {});
