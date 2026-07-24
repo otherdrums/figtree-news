@@ -13,6 +13,7 @@ import os
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 import typer
 
@@ -366,7 +367,7 @@ def eval_cmd(
 @app.command("serve")
 def serve_cmd(
     db: str = typer.Option("./news.lance"),
-    sources: str = typer.Option("./sources.json"),
+    sources: str = typer.Option(str(Path(__file__).parent.parent / "demo/sources.json")),
     host: str = typer.Option("127.0.0.1"),
     port: int = typer.Option(8000),
 ):
