@@ -13,13 +13,6 @@ from typing import Any
 from figtree import Figment, FigmentStore
 
 
-def _article_images(store: FigmentStore) -> list[Figment]:
-    return [
-        f for f in store.all()
-        if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()
-    ]
-
-
 def collect_pending_corrections(
     store: FigmentStore,
     confirmation_threshold: int = 2,

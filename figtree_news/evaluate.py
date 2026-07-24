@@ -186,29 +186,6 @@ BRIEF_SYSTEM = (
     "Respond with ONLY valid JSON."
 )
 
-def build_brief_review_prompt(brief_text: str, headlines: list[str]) -> list[dict]:
-    hl = "\n".join(f"- {h}" for h in headlines[:8])
-    user = (
-        f"SOURCE STORIES:\n{hl}\n\n"
-        f"GENERATED BRIEF:\n---\n{brief_text}\n---\n\n"
-        "Evaluate for:\n"
-        "- Brevity: should be 2-3 concise sentences. Is it too long or verbose?\n"
-        "- Accuracy: does it reflect the source articles correctly?\n"
-        "- Completeness: did it miss a major story?\n\n"
-        "Respond with JSON:\n"
-        "{\n"
-        '  "acceptable": true/false,\n'
-        '  "issues": ["issue1", ...],\n'
-        '  "suggested_rewrite": "<1-3 sentence rewrite>" (only if unacceptable),\n'
-        '  "suggested_max_tokens": <optional int, if generation budget should change>,\n'
-        '  "note": "<any additional observation>"\n'
-        "}"
-    )
-    return [
-        {"role": "system", "content": BRIEF_SYSTEM},
-        {"role": "user", "content": user},
-    ]
-
 
 MERGE_SYSTEM = (
     "You are a news analyst. Check whether any of the following singleton "
@@ -668,50 +645,3 @@ def label_article_pairs(
     print(f"[eval]   same-event: {same_count}, different-event: {len(labels) - same_count}")
     
     return labels
-
-
-def evaluate_clustering_accuracy(
-    labels: list[dict[str, Any]],
-    clusters: list[list[Figment]],
-) -> dict[str, Any]:
-    """Compare clustering results against LLM ground truth labels.
-    
-    Returns precision, recall, and F1 for the clustering.
-    """
-    if not labels or not clusters:
-        return {"precision": 0.0, "recall": 0.0, "f1": 0.0}
-    
-    # Build cluster membership map
-    cluster_map = {}
-    for cluster in clusters:
-        for f in cluster:
-            cluster_map[f.figment_id] = cluster
-    
-    # Evaluate each labeled pair
-    tp = 0  # True positive: LLM says same, clustering says same
-    fp = 0  # False positive: LLM says different, clustering says same
-    fn = 0  # False negative: LLM says same, clustering says different
-    
-    for label in labels:
-        a1_id, a2_id = label["a1"], label["a2"]
-        llm_same = label["same_event"]
-        
-        # Check if clustering puts them together
-        cluster_same = (a1_id in cluster_map and a2_id in cluster_map and 
-                       cluster_map[a1_id] is cluster_map[a2_id])
-        
-        if llm_same and cluster_same:
-            tp += 1
-        elif not llm_same and cluster_same:
-            fp += 1
-        elif llm_same and not cluster_same:
-            fn += 1
-    
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-    
-    print(f"[eval] clustering accuracy: precision={precision:.3f}, recall={recall:.3f}, f1={f1:.3f}")
-    print(f"[eval]   tp={tp}, fp={fp}, fn={fn}")
-    
-    return {"precision": precision, "recall": recall, "f1": f1}

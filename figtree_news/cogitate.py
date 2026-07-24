@@ -15,13 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from typing import Any
 
 import numpy as np
 
 from figtree import Figment, FigmentStore
 
-from .decompose import ROLES
 from .llm_config import LLMConfig
 
 

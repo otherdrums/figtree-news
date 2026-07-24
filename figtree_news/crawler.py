@@ -316,7 +316,7 @@ class Crawler:
 
         Returns the number of articles successfully added.
         """
-        from .searxng import search as searxng_search, results_to_articles, SearxngConfig
+        from .searxng import search as searxng_search, results_to_articles
 
         cfg = self.registry.searxng
         if not cfg or not cfg.enabled:
@@ -397,12 +397,3 @@ class Crawler:
                     budget -= got
         stats["sources"] = sorted(stats["sources"])
         return stats
-
-    def run_loop(self, feeds: dict[str, str], seeds: list[str], interval: int = 3600):
-        while True:
-            try:
-                stats = self.run_once(feeds, seeds)
-                print(f"[crawler] tick complete: {stats}")
-            except Exception as exc:  # pragma: no cover
-                print(f"[crawler] error: {exc}")
-            time.sleep(interval)

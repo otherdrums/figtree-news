@@ -1,6 +1,0 @@
-{
-  "reuters":   { "name": "Reuters",   "base_trust": 0.9, "url": "https://www.reuters.com/", "kind": "news" },
-  "ap":        { "name": "Associated Press", "base_trust": 0.9, "url": "https://apnews.com/", "kind": "news" },
-  "blog":      { "name": "Random Blog", "base_trust": 0.5, "url": null, "kind": "blog" },
-  "official":  { "name": "Gov Press Office", "base_trust": 0.8, "url": null, "kind": "official" }
-}

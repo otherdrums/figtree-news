@@ -7,7 +7,7 @@ Loaded from the ``"llm"`` key in ``sources.json``. When ``enabled`` is False
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass

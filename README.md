@@ -1,347 +1,254 @@
 # figtree-news
 
-A **source-aware news aggregator** built on [figtree](https://github.com/otherdrums/figtree)
-(figment-based memory for language models). It ingests articles and videos from
-RSS/Atom feeds (including YouTube, Rumble), **web search via SearXNG**, or local
-files, stores them as *figments* (sentences → atomic figments under an article
-*image*), and uses figtree's source-based trust model to track which outlets
-corroborate or contradict each other.
+> **EXPERIMENTAL** — This system is under active development and subject to
+> breaking changes, rapid iteration, and incomplete features. APIs, data
+> formats, and config files may change without notice. Not production-ready.
 
-This repo is an **application** on top of the figtree *library*. No news-specific
-logic lives in the core library; everything here is composition of the public API.
+A **source-aware news aggregator** built on [figtree](https://github.com/otherdrums/figtree)
+(figment-based memory for language models). Articles are decomposed into
+reusable semantic primitives (WHO/WHAT/WHERE/WHEN/WHY/HOW) that link across
+narratives — enabling structured search, trust-aware reasoning, and
+self-correcting LLM evaluation.
+
+## How It Works
+
+The system treats news as a graph of reusable **figments** rather than
+independent documents. Here's the data flow:
+
+```
+                    ┌─────────────┐
+                    │  RSS Feeds  │
+                    │  SearXNG    │
+                    │  Seed URLs  │
+                    └──────┬──────┘
+                           │
+                    ┌──────▼──────┐
+                    │   Crawl &   │  Fetch, extract text/images, dedup
+                    │   Ingest    │  URL + title dedup, robots.txt
+                    └──────┬──────┘
+                           │
+                    ┌──────▼──────┐
+                    │  Figmentize │  Article → sentences → atomic figments
+                    │  (boundary) │  Each sentence gets a boundary vector
+                    └──────┬──────┘
+                           │
+              ┌────────────┼────────────┐
+              │            │            │
+       ┌──────▼──────┐ ┌──▼────┐ ┌─────▼─────┐
+       │ Decompose   │ │ Trust │ │ Lineage   │
+       │ (background)│ │       │ │           │
+       └──────┬──────┘ └──┬────┘ └─────┬─────┘
+              │           │            │
+              │    ┌──────▼──────┐     │
+              │    │  Narratives │─────┘
+              │    │  (clusters) │  Entity overlap → story clusters
+              │    └──────┬──────┘
+              │           │
+       ┌──────▼──────┐ ┌──▼──────┐
+       │  Evaluate   │ │ Brief   │
+       │  (LLM)      │ │ (LLM)  │
+       └──────┬──────┘ └──┬──────┘
+              │           │
+       ┌──────▼───────────▼──────┐
+       │     Web UI / API        │
+       └─────────────────────────┘
+```
+
+### Core Concepts
+
+**Figments** are the atomic unit. An article is an "image" figment containing
+child sentence figments. Each sentence can be decomposed into role figments
+(WHO, WHAT, WHERE, WHEN, WHY, HOW). The same role figment (e.g. "Trump" as WHO)
+reuses across multiple articles, creating a bipartite graph where narrative
+relationships emerge from figment overlap.
+
+**Boundary vectors** (~10KB float32) are captured from the model's hidden state
+during ingestion. They enable similarity search, dedup, and frame-shift
+detection without re-running the model.
+
+**Narrative clustering** groups articles by entity overlap (Jaccard >= 0.30 with
+>= 2 shared entities from titles). Each cluster becomes a "story" with first-
+reporter detection, derivative echo chains, and cross-source trust scores.
+
+**Self-correction** — an external LLM (Qwen 3.6 35B) reviews narrative clusters,
+flags miscategorized articles, and suggests corrections. Corrections accumulate
+across eval runs and auto-apply at a configurable confirmation threshold.
 
 ## Install
 
 ```bash
-# from the figtree repo root
-pip install -e .
-
-# from this repo root
-pip install -e .
+pip install -e .   # from figtree-news/ root (also install figtree first)
 ```
 
-Runtime deps: `typer`, `feedparser`, `httpx`, `trafilatura`, and transitively
-`torch`, `transformers`, `lancedb` (via figtree).
-
-## Quick start
+## Quick Start
 
 ```bash
-# 1. Configure sources (trust, feeds, logos, search queries)
+# 1. Configure sources
 cp demo/sources.json ./sources.json
 
-# 2. Continuous crawl — no pause, GPU always building cache
-figtree-news crawl --interval 0
+# 2. Serve the web newspaper (includes background crawler)
+figtree-news serve --db demo/news.lance --sources demo/sources.json --host 0.0.0.0 --port 8000
 
-# 3. Serve the web newspaper
-figtree-news serve --port 8000
+# 3. Standalone crawl (CLI)
+figtree-news crawl --interval 0 --max-articles 40
 
-# 4. Backfill with date range
-figtree-news crawl --backfill --since 2026-07-01 --before 2026-07-21
-
-# 5. Web search via SearXNG (standalone)
-figtree-news search "AI regulation" --time-range week --max 20
-
-# 6. Limit stories per pipeline run
-figtree-news crawl --interval 0 --max-stories 20
+# 4. Standalone search
+figtree-news search "AI regulation" --time-range day --max 10
 ```
 
 ## Features
 
 ### Web Newspaper (FastAPI)
 
-- **Front page** with world brief, newspaper-style narrative comparison cards
-- **Source logos** (Google favicon CDN) next to source badges throughout
-- **Article images** from RSS `media_content`/`media_thumbnail`, SearXNG thumbnails, and `og:image`
-- **Video embeds** (YouTube/Rumble) rendered as 16:9 iframes
-- **Author bylines** on articles where available
-- **Full-text search** (SQLite FTS5) with date range filters and BM25 ranking
-- **Slide-out control panel** (600px) with all crawl + search settings
-- **Live stats bar** (articles, stories, sources, brief, UTC clock, crawler status)
-- **WebSocket live updates** — page auto-refreshes when new content arrives
-- **Frame shift badges** on narratives where coverage framing diverges
-- **Responsive design** with benthic.io dark theme
+- Front page with world brief, narrative comparison cards, source trust board
+- Article detail pages with images, video embeds, author bylines
+- Source pages with all articles + trust scores
+- Narrative pages with all source versions + frame-shift badges
+- Full-text search (SQLite FTS5) with date range filters
+- Slide-out control panel (600px) for all crawl + search settings
+- WebSocket live updates — page auto-refreshes on new content
+- Dark theme (benthic.io style)
 
 ### Crawl Control Panel
 
 | Control | Default | Description |
 |---------|---------|-------------|
-| Max articles | 40 | Cap articles ingested per tick |
-| Max stories | 0 (unlimited) | Cap narratives generated by lineage |
-| Since | (empty) | Only ingest articles published after this date |
-| Before | (empty) | Only ingest articles published before this date |
-| Pause between ticks | 0 | Seconds between continuous ticks (0 = no pause) |
-| Compute KV cache | off | Cache K/V vectors for boundary-based generation |
-| Generate summaries | on | Run LLM summaries + world brief |
-| Enable LLM Review | off | External LLM for cluster validation + self-correction |
+| Max articles | 40 | Cap per tick |
+| Max stories | 0 (unlimited) | Cap narratives per pipeline run |
+| Since / Before | (empty) | Date range filter |
+| Pause between ticks | 0 | Seconds between ticks (0 = continuous) |
+| Compute KV cache | off | Cache K/V for boundary-based generation |
+| Generate summaries | on | Per-article summaries + world brief |
+| Enable LLM Review | off | External LLM cluster validation + self-correction |
 | **Web Search (SearXNG)** | | |
-| Enable web search | on | Toggle SearXNG web search |
-| Time range | Last week | day / week / month / year / anytime |
+| Enable web search | on | Toggle SearXNG search |
+| Time range | Last day | day / week / month / year / anytime |
 | Categories | News | news / general / general,news |
-| Search queries | (from sources.json) | One query per line; results fetched + ingested per tick |
+| Search queries | (from sources.json) | One per line; results ingested per tick |
 
 ### Web Search (SearXNG)
 
-Ingest articles from across the web via a local [SearXNG](https://docs.searxng.org/)
-metasearch instance. Search results go through the same ingestion pipeline as RSS
-feeds: full text is fetched via trafilatura, images/video extracted, deduplicated
-against existing articles by URL and title.
-
-```json
-// In sources.json
-"searxng": {
-  "url": "http://192.168.10.202:8081",
-  "enabled": true,
-  "queries": [
-    "Israel Gaza ceasefire",
-    "Ukraine Russia war",
-    "AI regulation"
-  ],
-  "categories": "news",
-  "time_range": "week",
-  "max_results": 20,
-  "pages": 1
-}
-```
-
-```bash
-# Standalone search from CLI
-figtree-news search "AI regulation" --time-range week --max 20
-```
-
-Search shares the article budget with RSS feeds. Unknown domains are
-auto-registered as sources with `base_trust=0.7`.
+Articles from across the web via a local [SearXNG](https://docs.searxng.org/)
+instance. Full text fetched via trafilatura, deduplicated by URL + title.
+Unknown domains auto-registered as sources with `base_trust=0.7`.
 
 ### Decomposition Engine
 
-Breaks each sentence into structured semantic **role figments** — the journalistic
-5W1H (WHO, WHAT, WHERE, WHEN, WHY, HOW). Role figments are reusable primitives:
-the same `fig:who:trump` appears in every narrative about Trump, creating a
-bipartite graph where narrative relationships emerge from figment overlap.
-
-- Runs in background via 3 parallel workers after ingestion
-- Uses external LLM (Qwen 3.6 35B) for extraction
-- Each article produces ~5 role figments on average
-- Role figments link back to their parent sentence and article
-- Enables structured search: "who was involved in X?" → find all WHO figments
+Background extraction of WHO/WHAT/WHERE/WHEN/WHY/HOW role figments from
+each sentence, using 3 parallel workers and the external LLM. Enables
+structured search: "who was involved in X?" → find all WHO figments.
 
 ### Cogitation Engine
 
-Background "dreaming" phase that periodically consolidates knowledge:
-
-1. **Duplicate merging** — finds and merges semantically similar figments
-2. **Relationship discovery** — discovers new connections via co-occurrence
-3. **Relationship strengthening** — reinforces frequently co-occurring figments
-4. **Insight generation** — LLM-generated insights about patterns and trends
-
-Runs on a configurable interval (default 6 hours).
+Periodic "dreaming" phase (default 6h interval):
+1. Duplicate merging — merge semantically similar figments
+2. Relationship discovery — co-occurrence patterns
+3. Insight generation — LLM-generated landscape insights
 
 ### LLM Evaluation & Self-Correction
 
-Uses an external LLM to validate and improve the pipeline output:
+External LLM (Qwen 3.6 35B) validates pipeline output:
+- **Cluster validation** — flags miscategorized articles in narratives
+- **Frame shift verification** — confirms genuine framing divergence
+- **Brief review** — critiques world brief for accuracy
+- **Self-correction** — corrections accumulate, auto-apply at threshold (default 2)
 
-- **Cluster validation** — LLM reviews narrative clusters, flags miscategorized articles
-- **Frame shift verification** — confirms when coverage framing genuinely diverges
-- **Brief review** — LLM critiques the world brief for accuracy and completeness
-- **Article pair labeling** — labels whether article pairs cover the same event
-- **Self-correction** — corrections accumulate across eval runs, auto-apply at a configurable confirmation threshold (default 2)
-
-All evaluations and corrections are persisted as first-class figments.
-
-### Continuous Mode
-
-Continuous mode keeps the crawler running back-to-back with zero pause (by
-default). Each tick:
-
-1. Reads all configured RSS feeds
-2. Searches SearXNG for configured queries (shares budget with feeds)
-3. Deduplicates against `seen_urls.json` — new URLs are ingested, seen ones skipped
-4. Extracts images (`og:image`, `media:thumbnail`, SearXNG thumbnails) and video embeds (YouTube/Rumble)
-5. Queues articles for background decomposition (role figments)
-6. Runs pipeline: trust → lineage (clusters articles into narratives) → evaluation → summaries → brief
-7. Broadcasts `content_update` over WebSocket so the page refreshes automatically
-
-The database is **append-only for new content** — old articles stay, new ones
-layer on top. Narratives grow as more sources cover the same event.
-
-### Media & Branding
-
-- **Article images**: RSS `media_content`/`media_thumbnail`/`enclosures` + `og:image`/`twitter:image` + SearXNG thumbnails (trafilatura + regex)
-- **Video embeds**: YouTube (`youtube.com/watch?v=` → iframe), Rumble (`rumble.com` → iframe), RSS `media:video`
-- **Source logos**: Google favicon CDN (`google.com/s2/favicons?domain=...`), configurable per-source via `logo_url`
-- Graceful fallback: broken media hidden via `onerror`
-
-### Trust & Lineage
-
-- Per-source `base_trust` in `sources.json` → figtree trust propagation
-- **Narrative clustering** via entity overlap (Jaccard >= 0.30, min 2 shared entities)
-- **First reporter detection** (earliest published/first_seen)
-- **Derivative edge detection** (echo chains between outlets)
-- **Frame shift detection** — cosine boundary similarity < 0.85 between newest and first article
-- **Contradiction awareness** across sources
-- **Max stories cap** — keep only the top N most-covered stories
-
-### Pipeline (8 phases)
+## Pipeline (8 phases)
 
 ```
-crawl -> ingest -> decompose -> trust -> lineage -> evaluate -> summaries -> world brief
-  |        |         |          |         |          |           |            |
-  |        |         |          |         |          |           |            +-- /api/stats
-  |        |         |          |         |          |           +-- per-article summaries
-  |        |         |          |         |          +-- LLM cluster review + frame shift check
-  |        |         |          |         +-- narratives + derivatives + frame shift (max_stories cap)
-  |        |         |          +-- source trust propagation (idempotent, store-persisted)
-  |        |         +-- WHO/WHAT/WHERE/WHEN/WHY/HOW role figments (background, 3 workers)
-  |        +-- articles -> figments (sentence-level + image + video_url)
-  +-- RSS feeds + SearXNG search + bounded link-follower (URL dedup, robots.txt, date range filter)
+crawl → ingest → decompose → trust → lineage → evaluate → summaries → brief
 ```
+
+1. **Crawl**: RSS feeds + SearXNG search + bounded link-follower (URL dedup, robots.txt)
+2. **Ingest**: Articles → figments (sentence-level + image + video)
+3. **Decompose**: WHO/WHAT/WHERE/WHEN/WHY/HOW role figments (background, 3 workers)
+4. **Trust**: Source trust propagation (idempotent, store-persisted)
+5. **Lineage**: Narrative clustering via entity overlap + frame shift detection
+6. **Evaluate**: LLM cluster review + frame shift check
+7. **Summaries**: Per-article summaries
+8. **Brief**: World brief (2-3 sentences)
 
 ## Architecture
 
 ```
 figtree_news/
-  config.py              # SourceRegistry: source_id -> {name, base_trust, url, logo_url}
-  searxng.py             # SearXNG client: search -> article dicts with image/video extraction
-  ingest.py              # Feed/article -> figments with provenance + image + video extraction
-  crawler.py             # Crawler: feeds + SearXNG search + BFS link-follower
-  pipeline.py            # 8-phase orchestration: trust -> lineage -> eval -> summaries -> brief
-  lineage.py             # Narrative clustering, frame shift, derivative edges
-  trust.py               # Source trust propagation
-  decompose.py           # WHO/WHAT/WHERE/WHEN/WHY/HOW role figment extraction (3 workers)
-  cogitate.py            # Background consolidation: dedup, relationships, insights
-  evaluate.py            # External LLM evaluation: cluster validation, frame shift, brief review
-  correct.py             # Self-correction: confirmation threshold + auto-apply
-  llm_config.py          # External LLM configuration (URL, model, timeout, feature flags)
-  summarize_news.py      # Per-article summaries + world brief
-  query.py               # Embed query -> nearest figments -> generate
-  search_index.py        # SQLite FTS5 full-text search index
-  eval.py                # Per-source faithful-recall eval
-  export.py              # Graph export as JSON
-  cli.py                 # Typer CLI: crawl, serve, search, query, lineage, export, eval
-  web/
-    serve.py             # FastAPI app: HTML pages + JSON API + WebSocket
-    templates/           # Jinja2: base, index, article, source, narrative, lineage, search
-    static/style.css     # benthic.io dark theme
+├── cli.py              # Typer CLI: crawl, serve, search, query, lineage, export, eval
+├── config.py           # SourceRegistry: source config + SearXNG + LLM settings
+├── searxng.py          # SearXNG client + article extraction
+├── ingest.py           # Feed/article → figments with provenance
+├── crawler.py          # Crawler: feeds + SearXNG + BFS link-follower
+├── pipeline.py         # 8-phase pipeline orchestration
+├── lineage.py          # Narrative clustering + frame shift + derivative edges
+├── trust.py            # Source trust propagation
+├── decompose.py        # WHO/WHAT/WHERE/WHEN/WHY/HOW extraction (3 workers)
+├── cogitate.py         # Background consolidation + insights
+├── evaluate.py         # External LLM evaluation: clusters, frame shift, brief
+├── correct.py          # Self-correction: confirmation threshold + auto-apply
+├── llm_config.py       # External LLM configuration
+├── summarize_news.py   # Per-article summaries + world brief
+├── query.py            # Embed query → nearest figments → generate
+├── search_index.py     # SQLite FTS5 full-text search
+├── eval.py             # Per-source faithful-recall eval
+├── export.py           # Graph export as JSON
+└── web/
+    ├── serve.py         # FastAPI app: HTML pages + JSON API + WebSocket
+    ├── templates/       # Jinja2 HTML templates
+    └── static/          # CSS (dark theme)
 ```
 
-### Source registry
+### Source Registry
 
-`sources.json` is a map of `source_id -> {name, base_trust, url, kind, logo_url}`.
+`sources.json` maps `source_id → {name, base_trust, url, kind, logo_url}`.
+Demo ships with 15 sources (7 RSS + 8 YouTube).
 
-The demo config ships with 15 sources (7 news/RSS + 8 YouTube video):
+### Data Storage
 
-| Source | ID | Kind | Trust |
-|--------|----|------|-------|
-| BBC News | `bbc` | news | 0.9 |
-| Al Jazeera | `aljazeera` | news | 0.85 |
-| NPR | `npr` | news | 0.9 |
-| The Guardian | `guardian` | news | 0.85 |
-| Reuters | `reuters` | news | 0.9 |
-| DW News | `dw` | news | 0.85 |
-| France 24 English | `france24` | news | 0.85 |
-| Fox News | `foxnews` | video | 0.8 |
-| CNN | `cnn` | video | 0.8 |
-| MSNBC | `msnbc` | video | 0.8 |
-| CBS News | `cbsnews` | video | 0.8 |
-| Associated Press | `ap` | video | 0.9 |
-| DW News (YT) | `dwnews_yt` | video | 0.85 |
-| France 24 (YT) | `france24_yt` | video | 0.85 |
-| PBS NewsHour | `pbsnewshour` | video | 0.9 |
+- **LanceDB** — all figments (articles, narratives, edges, trust, role figments)
+- **SQLite FTS5** — full-text search index (`{db}_fts.db`)
+- **seen_urls.json** — URL dedup (runtime, gitignored)
+- **KV cache** (optional) — quantized K/V for boundary-based generation
 
-### Rumble
-
-Rumble blocks direct scraping via Cloudflare, so its feeds cannot be added
-straight to `sources.json`. To use Rumble sources, run a self-hosted RSS proxy:
-
-| Project | Stack | Usage |
-|---------|-------|-------|
-| [mmoyles87/rumble-rss-proxy](https://github.com/mmoyles87/rumble-rss-proxy) | Express.js, Docker | `GET /:channel` -> RSS |
-| [porjo/rumblerss](https://github.com/porjo/rumblerss) | Go, Docker | `GET /:channel` -> RSS |
-| [RSS-Bridge](https://github.com/RSS-Bridge/rss-bridge) | PHP | `RumbleBridge` — public instance at `rss-bridge.org` |
-
-Once the proxy is running, point a feed entry at it:
-
-```json
-"feeds": {
-  "rumble_channel": "http://localhost:3000/channelname"
-}
-```
-
-### Data storage
-
-- **LanceDB** — all figments (articles, narratives, edges, trust, role figments, corrections)
-- **SQLite FTS5** — full-text search index (auto-created at `{db}_fts.db`)
-- **seen_urls.json** — URL dedup for crawl idempotency (grows unbounded)
-- **KV cache** (optional) — quantized K/V blobs for boundary-based generation
-
-### Web API
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Front page (brief, narratives, articles, trust board) |
-| `/article/{fid}` | GET | Article detail page (video embed or hero image) |
-| `/source/{sid}` | GET | Source page with articles, narratives, logo |
-| `/narrative/{nid}` | GET | Narrative detail with all source versions |
-| `/lineage` | GET | First-reporter / echo-chain view |
-| `/search` | GET | Full-text search with date range filters |
-| `/api/search?q=&range=&sort=&page=` | GET | JSON search results (BM25) |
-| `/api/stats` | GET | Store stats (articles, narratives, sources, brief) |
-| `/api/narratives` | GET | JSON list of all narratives |
-| `/api/sources` | GET | JSON source trust agenda |
-| `/api/config` | GET | Feeds/seeds/searxng/llm from sources.json |
-| `/api/crawl/status` | GET | Crawler state |
-| `/api/crawl/run` | POST | Start crawl — body: `{feeds, seeds, max_articles, max_stories, since, before, interval, continuous, summarize, compute_kv, llm_enabled, searxng_enabled, searxng_queries, searxng_time_range, searxng_categories}` |
-| `/api/crawl/stop` | POST | Stop continuous crawl |
-| `/api/pipeline/run` | POST | Run pipeline — body: `{summarize, brief, max_stories}` |
-| `/api/summaries/regenerate` | POST | Regenerate article summaries |
-| `/ws` | WebSocket | `{type: "crawl_status", data: {...}}` + `{type: "content_update", data: {source, added, total_articles}}` |
-
-## CLI reference
+## CLI Reference
 
 ```bash
 figtree-news crawl [OPTIONS]
   --feed source=url         Add feed (repeatable)
   --seed url                Add seed URL (repeatable)
-  --interval N              Pause between ticks in seconds, 0 = no pause (default: 0)
+  --interval N              Seconds between ticks, 0 = continuous (default: 0)
   --max-articles N          Cap articles per tick (default: 40)
-  --max-stories N           Cap narratives per pipeline run, 0 = unlimited (default: 0)
-  --since YYYY-MM-DD        Only ingest articles published after this date
-  --before YYYY-MM-DD       Only ingest articles published before this date
-  --backfill                Deep initial crawl (200 article cap)
+  --max-stories N           Cap narratives, 0 = unlimited (default: 0)
+  --since YYYY-MM-DD        Only ingest after this date
+  --before YYYY-MM-DD       Only ingest before this date
+  --backfill                Deep crawl (200 cap)
   --once                    Single tick then exit
-  --loop / --no-loop        Continuous mode (default: on)
-  --model-id MODEL          HuggingFace model ID
   --compute-kv              Enable KV cache persistence
-  --no-summaries            Skip LLM summaries
-
-figtree-news search QUERY [OPTIONS]
-  --max N                   Max results per query (default: 20)
-  --pages N                 Number of result pages (default: 1)
-  --time-range RANGE        day|week|month|year|'' (default: from sources.json)
-  --categories CATS         SearXNG categories (default: news)
-  --db PATH                 LanceDB store path
-  --sources PATH            sources.json path
+  --no-summaries            Skip summaries
 
 figtree-news serve [OPTIONS]
-  --db PATH                 LanceDB store path (default: ./news.lance)
+  --db PATH                 LanceDB path (default: ./news.lance)
   --sources PATH            sources.json path (default: ./sources.json)
   --host HOST               Bind address (default: 127.0.0.1)
   --port PORT               Bind port (default: 8000)
+
+figtree-news search QUERY [OPTIONS]
+  --max N                   Max results (default: 20)
+  --time-range RANGE        day|week|month|year (default: from sources.json)
+  --categories CATS         SearXNG categories (default: news)
 ```
 
 ## Tests
 
 ```bash
-pytest tests/
+python3 -m pytest tests/ -v
 ```
 
-## Deployment with systemd
-
-```bash
-./systemd/install_systemd.sh
-systemctl --user enable --now figtree-news-crawler figtree-news-web
-```
+All tests run CPU-only (no GPU required).
 
 ## Model
 
-Default: Qwen3-4B (unsloth bnb-4bit)
-GPU: Quadro T1000 (3GB VRAM)
+- **Local (ingestion/summaries)**: Qwen3-4B (unsloth bnb-4bit), ~3GB VRAM
+- **External (eval/decomposition)**: Qwen 3.6 35B at configurable URL
+
+## License
+
+Research use. See parent [figtree](https://github.com/otherdrums/figtree) repo.

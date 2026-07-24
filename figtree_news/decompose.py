@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import Any
 
 from figtree import Figment, FigmentStore
 
@@ -275,52 +274,7 @@ class DecompositionEngine:
     
     def _normalize_text(self, text: str) -> str:
         """Normalize text for deduplication."""
-        # Lowercase, remove punctuation, collapse whitespace
         text = text.lower()
         text = re.sub(r'[^\w\s]', '', text)
         text = re.sub(r'\s+', ' ', text).strip()
         return text
-    
-    def get_role_figments(self, article_id: str) -> dict[str, list[Figment]]:
-        """Get all role figments for an article, grouped by role."""
-        article = self.store.get(article_id)
-        if not article:
-            return {}
-        
-        role_figment_ids = article.meta.get('role_figments', [])
-        role_figments = {role: [] for role in ROLES}
-        
-        for fid in role_figment_ids:
-            figment = self.store.get(fid)
-            if figment and figment.meta.get('role'):
-                role = figment.meta['role']
-                if role in role_figments:
-                    role_figments[role].append(figment)
-        
-        return role_figments
-    
-    def search_by_role(self, query: str, role: str, threshold: float = 0.75, k: int = 20) -> list[tuple[Figment, float]]:
-        """Search for role figments by semantic similarity."""
-        import numpy as np
-        
-        # Create query boundary (placeholder - should use embedding)
-        # For now, use zero boundary (will be improved with proper embedding)
-        query_boundary = np.zeros(2560, dtype=np.float32)
-        
-        # Get all figments with this role
-        all_figments = self.store.all()
-        role_figments = [f for f in all_figments if f.meta.get('role') == role]
-        
-        # Simple text matching for now (will be replaced with proper embedding search)
-        results = []
-        query_lower = query.lower()
-        for fig in role_figments:
-            text_lower = fig.text.lower()
-            if query_lower in text_lower or text_lower in query_lower:
-                results.append((fig, 1.0))
-            elif any(word in text_lower for word in query_lower.split()):
-                results.append((fig, 0.5))
-        
-        # Sort by score
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results[:k]

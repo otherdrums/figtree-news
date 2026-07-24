@@ -17,7 +17,6 @@ Provides:
 from __future__ import annotations
 
 import math
-import os
 import sqlite3
 import time
 from difflib import SequenceMatcher
@@ -116,11 +115,6 @@ class SearchIndex:
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (article_id, title, text[:3000], author, source_id, pub, seen),
         )
-        con.commit()
-
-    def delete_article(self, article_id: str) -> None:
-        con = self._conn()
-        con.execute("DELETE FROM articles_fts WHERE article_id = ?", (article_id,))
         con.commit()
 
     def search(

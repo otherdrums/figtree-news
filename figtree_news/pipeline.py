@@ -47,7 +47,6 @@ def run_pipeline(
         print(f"[pipeline]       sources={n.get('sources', [])}  members={len(n.get('members', []))}  frame_shift={n.get('frame_shift', False)}")
 
     # Phase 2.5: LLM-based clustering evaluation (ground truth)
-    clustering_eval = {}
     if llm_config and llm_config.enabled:
         t0 = time.time()
         print(f"\n[pipeline] Phase 2.5: LLM-based clustering evaluation (ground truth)")
