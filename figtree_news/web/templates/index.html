@@ -11,11 +11,35 @@
   </section>
   {% endif %}
 
-  <!-- Narratives: Newspaper Story Comparison Cards -->
-  <section class="stories-section">
+  <!-- Tab Navigation -->
+  <nav class="tab-nav">
+    <button class="tab-btn active" data-tab="stories" onclick="switchTab('stories')">Top Stories</button>
+    <button class="tab-btn" data-tab="who" onclick="switchTab('who')">Who</button>
+    <button class="tab-btn" data-tab="what" onclick="switchTab('what')">What</button>
+    <button class="tab-btn" data-tab="where" onclick="switchTab('where')">Where</button>
+    <button class="tab-btn" data-tab="why" onclick="switchTab('why')">Why</button>
+    <button class="tab-btn" data-tab="how" onclick="switchTab('how')">How</button>
+  </nav>
+
+  <!-- WHEN Date Range Selector -->
+  <div class="when-bar">
+    <label for="when-range" class="when-label">When:</label>
+    <select id="when-range" onchange="changeWhenRange()">
+      <option value="all" {% if not range or range == 'all' %}selected{% endif %}>All time</option>
+      <option value="today" {% if range == 'today' %}selected{% endif %}>Today</option>
+      <option value="yesterday" {% if range == 'yesterday' %}selected{% endif %}>Yesterday</option>
+      <option value="last_week" {% if range == 'last_week' %}selected{% endif %}>Last week</option>
+      <option value="last_month" {% if range == 'last_month' %}selected{% endif %}>Last month</option>
+      <option value="last_year" {% if range == 'last_year' %}selected{% endif %}>Last year</option>
+    </select>
+    <span id="when-count" class="when-count"></span>
+  </div>
+
+  <!-- Top Stories Tab -->
+  <section id="tab-stories" class="tab-panel active">
     <h2 class="section-title">
       <span class="section-kicker">Top Stories</span>
-      Comparing how outlets cover the same events
+      Newest coverage first
     </h2>
 
     {% if narratives %}
@@ -50,7 +74,7 @@
             </a>
           </h3>
           <div class="narrative-meta">
-            <span class="source-count">{{ n.sources | length }} sources</span>
+            <span class="source-count">{{ n.sources | length }} source{{ 's' if n.sources | length != 1 }}</span>
             {% if n.frame_shift %}
             <a href="/narrative/{{ n.narrative_id }}#frame-shift" class="shift-badge" title="{{ n.frame_shift_note }}">
               frame shift{% if n.frame_shift_score is not none %} ({{ "%.2f"|format(n.frame_shift_score) }}){% endif %}
@@ -60,6 +84,9 @@
               First: <a href="/source/{{ n.first_reporter }}">{{ n.first_reporter }}</a>
             </span>
           </div>
+          {% if n.latest_article_date %}
+          <span class="narrative-date">{{ n.latest_article_date[:10] }}</span>
+          {% endif %}
         </div>
 
         <div class="source-versions">
@@ -95,7 +122,13 @@
                 <img src="{{ article.meta.get('image_url') }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
               </div>
               {% endif %}
-              <a href="/article/{{ article.figment_id }}" class="read-more">Read full article &rarr;</a>
+              <div class="narrative-actions">
+                <a href="/article/{{ article.figment_id }}" class="read-more">Read article &rarr;</a>
+                <button class="btn btn-sm btn-find"
+                  onclick="findMore('{{ n.narrative_id }}', {{ n.sources | tojson | safe }}, {{ n.entities | tojson | safe }})">
+                  Find More
+                </button>
+              </div>
             </div>
             {% endif %}
           {% endfor %}
@@ -104,9 +137,22 @@
       {% endfor %}
     </div>
     {% else %}
-    <p class="muted">No cross-source stories yet. Run the crawler to ingest articles.</p>
+    <p class="muted">No stories yet. Run the crawler to ingest articles.</p>
     {% endif %}
   </section>
+
+  <!-- Role Tabs (loaded dynamically) -->
+  {% for role_name, role_label in [('who','Who'),('what','What'),('where','Where'),('why','Why'),('how','How')] %}
+  <section id="tab-{{ role_name }}" class="tab-panel" style="display:none;">
+    <h2 class="section-title">
+      <span class="section-kicker">{{ role_label }}</span>
+      Entities &amp; stories
+    </h2>
+    <div id="roles-{{ role_name }}" class="roles-list">
+      <p class="muted">Loading…</p>
+    </div>
+  </section>
+  {% endfor %}
 
   <!-- Source Trust Board -->
   <section>
@@ -133,54 +179,151 @@
       </table>
     </div>
   </section>
-
-  <!-- Latest Articles Feed -->
-  <section>
-    <h2 class="section-title">Latest Articles</h2>
-    <div class="articles-feed">
-      {% for a in articles %}
-      <article class="feed-item">
-        <div class="feed-meta">
-          <a href="/source/{{ a.meta.get('source_id') }}" class="source-badge">
-            {% set sid = a.meta.get('source_id', '') %}
-            {% if source_logos.get(sid) %}
-            <img src="{{ source_logos[sid] }}" class="source-logo-inline" alt="" loading="lazy" onerror="this.style.display='none'">
-            {% endif %}
-            {{ sid }}
-          </a>
-          {% if a.meta.get('published') %}
-          <time>{{ a.meta.get('published')[:16] }}</time>
-          {% endif %}
-        </div>
-        <div class="feed-body">
-          {% if a.meta.get('video_url') %}
-          <div class="feed-thumb feed-thumb-video">
-            <a href="{{ a.meta.get('video_url') }}" target="_blank" rel="noopener">
-              {% if a.meta.get('image_url') %}
-              <img src="{{ a.meta.get('image_url') }}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='&#9654;'">
-              {% else %}
-              <span class="video-play-icon">&#9654;</span>
-              {% endif %}
-            </a>
-          </div>
-          {% elif a.meta.get('image_url') %}
-          <div class="feed-thumb">
-            <img src="{{ a.meta.get('image_url') }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
-          </div>
-          {% endif %}
-          <div class="feed-text">
-            <h4><a href="/article/{{ a.figment_id }}">{{ a.meta.get('title') or a.text[:80] }}</a></h4>
-            <p class="feed-lead">{{ a.meta.get('summary') or a.text[:160] }}...</p>
-          </div>
-        </div>
-      </article>
-      {% endfor %}
-    </div>
-    {% if articles | length >= 30 %}
-    <p class="muted archive-link"><a href="/api/articles">View all articles &rarr;</a></p>
-    {% endif %}
-  </section>
 </div>
+
+<!-- Find More Modal -->
+<div id="find-more-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeFindMore()">
+  <div class="modal">
+    <h3>Find More Coverage</h3>
+    <p id="find-more-status">Searching…</p>
+    <div id="find-more-results"></div>
+    <button class="btn btn-secondary" onclick="closeFindMore()">Close</button>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // Tab switching
+  function switchTab(tab) {
+    document.querySelectorAll('.tab-panel').forEach(p => p.style.display = 'none');
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    var panel = document.getElementById('tab-' + tab);
+    if (panel) panel.style.display = 'block';
+    var btn = document.querySelector('.tab-btn[data-tab="' + tab + '"]');
+    if (btn) btn.classList.add('active');
+    // Load role tab content dynamically
+    if (tab !== 'stories') {
+      loadRoles(tab);
+    }
+  }
+
+  // WHEN range change
+  function changeWhenRange() {
+    var range = document.getElementById('when-range').value;
+    window.location.href = '?range=' + encodeURIComponent(range);
+  }
+
+  // Load role entities from API
+  async function loadRoles(role) {
+    var container = document.getElementById('roles-' + role);
+    if (!container) return;
+    var range = document.getElementById('when-range').value;
+    try {
+      var resp = await fetch('/api/roles?role=' + role + '&range=' + encodeURIComponent(range));
+      var data = await resp.json();
+      renderRoles(container, data.roles, role);
+      document.getElementById('when-count').textContent = data.narrative_count + ' story' + (data.narrative_count !== 1 ? 's' : '');
+    } catch (e) {
+      container.innerHTML = '<p class="muted">Failed to load.</p>';
+    }
+  }
+
+  function renderRoles(container, roles, role) {
+    if (!roles || roles.length === 0) {
+      container.innerHTML = '<p class="muted">No ' + role + ' entities found.</p>';
+      return;
+    }
+    var html = '<ul class="entity-list">';
+    roles.forEach(function(g) {
+      html += '<li class="entity-item">';
+      html += '<span class="entity-text">' + escapeHtml(g.text) + '</span>';
+      html += '<span class="entity-count">' + g.count + ' figment' + (g.count !== 1 ? 's' : '') + '</span>';
+      if (g.story_ids && g.story_ids.length > 0) {
+        html += '<div class="entity-stories">';
+        g.story_ids.forEach(function(sid) {
+          html += '<a href="/narrative/' + sid + '" class="story-link">View story</a>';
+        });
+        html += '</div>';
+      }
+      html += '</li>';
+    });
+    html += '</ul>';
+    container.innerHTML = html;
+  }
+
+  function escapeHtml(str) {
+    var div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // Find More
+  async function findMore(narrativeId, sources, entities) {
+    var modal = document.getElementById('find-more-modal');
+    var status = document.getElementById('find-more-status');
+    var results = document.getElementById('find-more-results');
+    modal.style.display = 'flex';
+    status.textContent = 'Searching for more coverage…';
+    results.innerHTML = '';
+
+    var query = entities && entities.length > 0 ? entities.slice(0, 5).join(' AND ') : narrativeId;
+    try {
+      var resp = await fetch('/api/story/' + narrativeId + '/find-more', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({query: query, sources: sources, max_results: 10})
+      });
+      var data = await resp.json();
+      if (data.error) {
+        status.textContent = 'Error: ' + data.error;
+        return;
+      }
+      status.textContent = 'Found ' + (data.found || 0) + ' new article' + ((data.found || 0) !== 1 ? 's' : '') + '.';
+      if (data.results && data.results.length > 0) {
+        results.innerHTML = '<ul>' + data.results.map(function(r) {
+          return '<li><a href="' + (r.url || '#') + '" target="_blank">' + escapeHtml(r.title || r.url || 'New article') + '</a> — <span class="source-badge">' + escapeHtml(r.source || '') + '</span></li>';
+        }).join('') + '</ul>';
+      }
+    } catch (e) {
+      status.textContent = 'Search failed.';
+    }
+  }
+
+  function closeFindMore() {
+    document.getElementById('find-more-modal').style.display = 'none';
+  }
+
+  // Apply date range from URL params on page load
+  (function() {
+    var params = new URLSearchParams(window.location.search);
+    var range = params.get('range');
+    if (range) {
+      var sel = document.getElementById('when-range');
+      if (sel) sel.value = range;
+    }
+    // Load the default tab's roles if needed
+    var activeTab = document.querySelector('.tab-btn.active');
+    if (activeTab && activeTab.dataset.tab !== 'stories') {
+      loadRoles(activeTab.dataset.tab);
+    }
+  })();
+
+  // Parse relative dates
+  document.querySelectorAll('time.published-date').forEach(function(el) {
+    var dt = el.getAttribute('datetime');
+    if (!dt) return;
+    var d = new Date(dt);
+    if (isNaN(d)) return;
+    var now = new Date();
+    var diff = (now - d) / 1000;
+    if (diff < 3600) el.textContent = Math.round(diff/60) + ' min ago';
+    else if (diff < 86400) el.textContent = Math.round(diff/3600) + ' hr ago';
+    else if (diff < 604800) el.textContent = Math.round(diff/86400) + ' days ago';
+    else el.textContent = d.toLocaleDateString();
+  });
+</script>
 {% endblock %}
 
 {% block control_panel %}
@@ -196,21 +339,8 @@
       <input type="number" id="max-stories" value="0" min="0" max="100">
     </div>
     <div class="form-group">
-      <label for="since">Since (date range start)</label>
-      <input type="date" id="since" value="">
-    </div>
-    <div class="form-group">
-      <label for="before">Before (date range end)</label>
-      <input type="date" id="before" value="">
-    </div>
-    <div class="form-group">
       <label title="Cache K/V vectors for instant article recall (uses more disk)">
         <input type="checkbox" id="compute-kv"> Compute KV cache
-      </label>
-    </div>
-    <div class="form-group">
-      <label>
-        <input type="checkbox" id="summarize" checked> Generate summaries & brief
       </label>
     </div>
     <div class="form-group">
@@ -221,6 +351,11 @@
     <div class="form-group">
       <label for="interval">Pause between ticks (seconds, 0 = no pause)</label>
       <input type="number" id="interval" value="0" min="0">
+    </div>
+    <div class="form-group">
+      <label title="Auto-switch: forward when new articles found, backward when stuck">
+        <input type="checkbox" id="smart-crawl" checked> Smart crawl (forward/backward auto)
+      </label>
     </div>
   </div>
 
@@ -243,10 +378,10 @@
       <label for="searxng-time-range">Time range</label>
       <select id="searxng-time-range">
         <option value="day">Last day</option>
-        <option value="week" selected>Last week</option>
-        <option value="month">Last month</option>
-        <option value="year">Last year</option>
-        <option value="">Any time</option>
+        <option value="last_week" selected>Last week</option>
+        <option value="last_month">Last month</option>
+        <option value="last_year">Last year</option>
+        <option value="all">Any time</option>
       </select>
     </div>
     <div class="form-group">
@@ -269,7 +404,6 @@
     <button class="btn btn-primary" id="btn-crawl-continuous" onclick="runCrawl(true)">Start Continuous</button>
     <button class="btn btn-danger" id="btn-crawl-stop" onclick="stopCrawl()" disabled>Stop</button>
     <button class="btn btn-secondary" onclick="runPipeline()">Run Pipeline Only</button>
-    <button class="btn btn-secondary" onclick="regenerateSummaries()">Regenerate Summaries</button>
   </div>
 </div>
 
@@ -284,262 +418,4 @@
   </div>
   <div class="progress-log" id="progress-log"></div>
 </div>
-
-<script>
-const WS_URL = `ws://${location.host}/ws`;
-let ws = null;
-let crawlRunning = false;
-
-// Persist crawl settings across page reloads
-const SETTINGS_KEY = 'figtree-news-crawl-settings';
-const SETTING_IDS = ['max-articles', 'max-stories', 'since', 'before', 'compute-kv', 'summarize', 'interval', 'llm-enabled', 'searxng-enabled', 'searxng-time-range', 'searxng-categories', 'searxng-queries'];
-
-function saveSettings() {
-  const settings = {};
-  SETTING_IDS.forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    settings[id] = el.type === 'checkbox' ? el.checked : el.value;
-  });
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-}
-
-function loadSettings() {
-  try {
-    const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return;
-    const settings = JSON.parse(raw);
-    SETTING_IDS.forEach(id => {
-      const el = document.getElementById(id);
-      if (!el || !(id in settings)) return;
-      if (el.type === 'checkbox') el.checked = settings[id];
-      else el.value = settings[id];
-    });
-  } catch (e) {}
-}
-
-// Restore saved settings on load
-loadSettings();
-// Save on any change
-SETTING_IDS.forEach(id => {
-  const el = document.getElementById(id);
-  if (el) el.addEventListener('change', saveSettings);
-});
-
-function connectWS() {
-  ws = new WebSocket(WS_URL);
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'crawl_status') updateCrawlUI(msg.data);
-    if (msg.type === 'content_update') refreshContent();
-  };
-  ws.onclose = () => setTimeout(connectWS, 2000);
-  ws.onerror = () => ws.close();
-}
-connectWS();
-
-let _contentRefreshTimer = null;
-let _lastArticleCount = 0;
-// Initialize count from stats bar on load
-fetch('/api/stats').then(r => r.json()).then(s => { _lastArticleCount = s.articles || 0; }).catch(() => {});
-function refreshContent() {
-  // Debounce: batch rapid updates into a single refresh
-  if (_contentRefreshTimer) clearTimeout(_contentRefreshTimer);
-  _contentRefreshTimer = setTimeout(async () => {
-    try {
-      const resp = await fetch('/api/stats');
-      const s = await resp.json();
-      const newCount = s.articles || 0;
-      if (newCount > _lastArticleCount) {
-        if (_autoRefreshEnabled) {
-          location.reload();
-        } else {
-          const banner = document.getElementById('new-articles-banner');
-          banner.querySelector('span').textContent = `${newCount - _lastArticleCount} new articles`;
-          banner.style.display = 'flex';
-        }
-      }
-      _lastArticleCount = newCount;
-      updateStats();
-    } catch (e) {}
-  }, 2000);
-}
-
-function updateCrawlUI(state) {
-  crawlRunning = state.running || state.continuous;
-  document.getElementById('btn-crawl-once').disabled = crawlRunning;
-  document.getElementById('btn-crawl-continuous').disabled = crawlRunning;
-  document.getElementById('btn-crawl-stop').disabled = !crawlRunning;
-
-  // Update stats bar crawler status
-  const crawlStat = document.getElementById('crawl-status');
-  if (state.current_step === 'error') {
-    crawlStat.textContent = 'Error';
-    crawlStat.style.color = '#FF6B6B';
-  } else if (state.current_step === 'done') {
-    crawlStat.textContent = 'Done';
-    crawlStat.style.color = '#0BD6AB';
-  } else if (state.current_step === 'sleeping') {
-    crawlStat.textContent = 'Sleeping';
-    crawlStat.style.color = '#FFC107';
-  } else if (state.current_step === 'next_tick') {
-    crawlStat.textContent = 'Next tick...';
-    crawlStat.style.color = '#A6F0FF';
-  } else if (state.running) {
-    crawlStat.textContent = state.current_step;
-    crawlStat.style.color = '#A6F0FF';
-  } else {
-    crawlStat.textContent = 'Idle';
-    crawlStat.style.color = '';
-  }
-
-  const isDone = state.current_step === 'done';
-  const isError = state.current_step === 'error';
-  const isSleeping = state.current_step === 'sleeping';
-  const isNextTick = state.current_step === 'next_tick';
-  const showPanel = state.running || isSleeping || isNextTick || isError || (!isDone && state.current_step !== 'idle');
-  document.getElementById('progress-panel').style.display = showPanel ? 'block' : 'none';
-
-  const stepEl = document.getElementById('progress-step');
-  stepEl.textContent = state.current_step;
-  stepEl.style.color = isError ? '#FF6B6B' : '';
-
-  document.getElementById('progress-message').textContent = state.message;
-  if (state.total > 0) {
-    const pct = Math.round((state.progress / state.total) * 100);
-    document.getElementById('progress-bar').style.width = pct + '%';
-    document.getElementById('progress-bar').style.background = isError ? '#FF6B6B' : '#0BD6AB';
-  }
-  if (state.stats && Object.keys(state.stats).length) {
-    document.getElementById('progress-log').innerHTML = JSON.stringify(state.stats, null, 2);
-  }
-  if (isError) {
-    document.getElementById('progress-log').innerHTML = '<span style="color:#FF6B6B">' + (state.message || 'Unknown error') + '</span>';
-  }
-  if (isDone && !state.continuous) {
-    setTimeout(() => { document.getElementById('progress-panel').style.display = 'none'; }, 5000);
-  }
-}
-
-async function runCrawl(continuous) {
-  const feeds = {};
-  document.querySelectorAll('#feeds-list .feed-row').forEach(row => {
-    const s = row.querySelector('.feed-source').value.trim();
-    const u = row.querySelector('.feed-url').value.trim();
-    if (s && u) feeds[s] = u;
-  });
-  const seeds = [];
-  document.querySelectorAll('#seeds-list .seed-row').forEach(row => {
-    const u = row.querySelector('.seed-url').value.trim();
-    if (u) seeds.push(u);
-  });
-  const body = {
-    feeds, seeds,
-    max_articles: parseInt(document.getElementById('max-articles').value),
-    max_stories: parseInt(document.getElementById('max-stories').value) || 0,
-    since: document.getElementById('since').value || '',
-    before: document.getElementById('before').value || '',
-    summarize: document.getElementById('summarize').checked,
-    continuous: continuous,
-    interval: parseInt(document.getElementById('interval').value),
-    llm_enabled: document.getElementById('llm-enabled').checked,
-    searxng_enabled: document.getElementById('searxng-enabled').checked,
-    searxng_time_range: document.getElementById('searxng-time-range').value,
-    searxng_categories: document.getElementById('searxng-categories').value,
-    searxng_queries: document.getElementById('searxng-queries').value,
-  };
-  try {
-    const resp = await fetch('/api/crawl/run', {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
-    });
-    const data = await resp.json();
-    if (data.error) alert(data.error);
-    else if (continuous) {
-      document.getElementById('progress-panel').style.display = 'block';
-    }
-  } catch (e) { alert('Failed: ' + e.message); }
-}
-
-async function stopCrawl() {
-  try { await fetch('/api/crawl/stop', {method: 'POST'}); } catch (e) {}
-}
-
-async function runPipeline() {
-  try {
-    const resp = await fetch('/api/pipeline/run', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({summarize: true, brief: true})
-    });
-    const data = await resp.json();
-    alert('Pipeline: ' + JSON.stringify(data));
-    location.reload();
-  } catch (e) { alert('Failed: ' + e.message); }
-}
-
-async function regenerateSummaries() {
-  try {
-    const resp = await fetch('/api/summaries/regenerate', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({limit: 500, top_n: 8})
-    });
-    const data = await resp.json();
-    alert('Summaries: ' + JSON.stringify(data));
-    location.reload();
-  } catch (e) { alert('Failed: ' + e.message); }
-}
-
-function addFeedRow(source = '', url = '') {
-  const div = document.createElement('div'); div.className = 'feed-row';
-  div.innerHTML = `<input type="text" class="feed-source" placeholder="source" value="${source}"><input type="url" class="feed-url" placeholder="Feed URL" value="${url}"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button>`;
-  document.getElementById('feeds-list').appendChild(div);
-}
-function addSeedRow(url = '') {
-  const div = document.createElement('div'); div.className = 'seed-row';
-  div.innerHTML = `<input type="url" class="seed-url" placeholder="Seed URL" value="${url}"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button>`;
-  document.getElementById('seeds-list').appendChild(div);
-}
-
-const DEFAULT_FEEDS = {
-  'bbc': 'http://feeds.bbci.co.uk/news/rss.xml',
-  'aljazeera': 'https://www.aljazeera.com/xml/rss/all.xml',
-  'npr': 'https://feeds.npr.org/1001/rss.xml',
-  'guardian': 'https://www.theguardian.com/world/rss'
-};
-Object.entries(DEFAULT_FEEDS).forEach(([s, u]) => addFeedRow(s, u));
-
-fetch('/api/config').then(r => r.json()).then(cfg => {
-  if (cfg.feeds && Object.keys(cfg.feeds).length) {
-    document.getElementById('feeds-list').innerHTML = '';
-    Object.entries(cfg.feeds).forEach(([s, u]) => addFeedRow(s, u));
-  }
-  if (cfg.seeds) cfg.seeds.forEach(u => addSeedRow(u));
-  if (cfg.llm) {
-    document.getElementById('llm-enabled').checked = cfg.llm.enabled || false;
-  }
-  if (cfg.searxng) {
-    document.getElementById('searxng-enabled').checked = cfg.searxng.enabled !== false;
-    document.getElementById('searxng-time-range').value = cfg.searxng.time_range || 'week';
-    document.getElementById('searxng-categories').value = cfg.searxng.categories || 'news';
-    document.getElementById('searxng-queries').value = (cfg.searxng.queries || []).join('\n');
-  }
-}).catch(() => {});
-</script>
-{% endblock %}
-
-{% block extra_js %}
-<script>
-  // Parse relative dates
-  document.querySelectorAll('time.published-date').forEach(el => {
-    const dt = el.getAttribute('datetime');
-    if (!dt) return;
-    const d = new Date(dt);
-    if (isNaN(d)) return;
-    const now = new Date();
-    const diff = (now - d) / 1000;
-    if (diff < 3600) el.textContent = Math.round(diff/60) + ' min ago';
-    else if (diff < 86400) el.textContent = Math.round(diff/3600) + ' hr ago';
-    else if (diff < 604800) el.textContent = Math.round(diff/86400) + ' days ago';
-    else el.textContent = d.toLocaleDateString();
-  });
-</script>
 {% endblock %}

@@ -179,7 +179,7 @@ def _cluster(articles: list[Figment], min_shared: int = 2, min_jaccard: float = 
     groups: dict[str, list[Figment]] = {}
     for fid in parent:
         groups.setdefault(find(fid), []).append(by_id[fid])
-    return [g for g in groups.values() if len(g) >= 2]
+    return list(groups.values())
 
 
 
@@ -210,8 +210,8 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
     figments: list[Figment] = []
     summaries: list[dict[str, Any]] = []
 
-    # Sort clusters by size (largest first) so max_stories keeps the most-covered stories
-    clusters.sort(key=lambda g: len(g), reverse=True)
+    # Sort by latest article date so stories with newest coverage float to top
+    clusters.sort(key=lambda g: max((_parse_time(f) or datetime.max.replace(tzinfo=timezone.utc)) for f in g), reverse=True)
     if max_stories > 0:
         clusters = clusters[:max_stories]
 
@@ -267,6 +267,10 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
             frame_shift = cos_sim < 0.85
             frame_shift_score = cos_sim
 
+        # Find the latest article date in this narrative
+        latest_time = max((ft[1] for ft in times if ft[1]), default=None)
+        latest_iso = latest_time.isoformat() if latest_time else ""
+
         narrative = Figment.create(
             text=narrative_text,
             boundary=first.boundary.copy(),
@@ -286,6 +290,7 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
                     f"(first: {first.meta.get('source_id')}, latest: {newest.meta.get('source_id')})"
                     if frame_shift else ""
                 ),
+                "latest_article_date": latest_iso,
             },
             figment_id=narrative_id,
         )
@@ -298,6 +303,7 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
                 "first_reporter": first.meta.get("source_id"),
                 "first_reporter_url": first.meta.get("url"),
                 "size": len(group),
+                "latest_article_date": latest_iso,
             }
         )
 
@@ -333,6 +339,7 @@ def get_narratives(store: FigmentStore, *, all_figs: list | None = None) -> list
                     "frame_shift": f.meta.get("frame_shift", False),
                     "frame_shift_score": f.meta.get("frame_shift_score"),
                     "frame_shift_note": f.meta.get("frame_shift_note", ""),
+                    "latest_article_date": f.meta.get("latest_article_date", ""),
                 }
             )
     return out
@@ -381,3 +388,31 @@ def source_agenda(store: FigmentStore, *, all_figs: list | None = None) -> dict[
             "agreeing": info["agreeing"],
         }
     return agenda
+
+
+def assign_roles_to_narratives(store: FigmentStore, *, all_figs: list | None = None) -> int:
+    """Link role figments to their parent narrative via story_id meta key.
+
+    After lineage recomputes narratives, this walks all role figments and
+    stamps each one with the narrative_id of the story whose member articles
+    reference the same parent article. Idempotent — only writes when changed.
+    """
+    figs = all_figs if all_figs is not None else store.all()
+    narrs = get_narratives(store, all_figs=figs)
+    updated = 0
+    for n in narrs:
+        member_set = set(n["members"])
+        for f in figs:
+            article_id = f.meta.get("article_id")
+            if not article_id or article_id not in member_set:
+                continue
+            refs = f.meta.get("references", [])
+            if member_set.isdisjoint(refs):
+                continue
+            existing = f.meta.get("story_id")
+            if existing == n["narrative_id"]:
+                continue
+            f.meta["story_id"] = n["narrative_id"]
+            store.upsert([f], hidden_size=f.boundary.shape[0])
+            updated += 1
+    return updated

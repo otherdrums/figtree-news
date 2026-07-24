@@ -32,11 +32,44 @@ from figtree.kv_cache_manager import KVCacheManager
 from .. import summarize_news
 from ..config import SourceRegistry
 from ..crawler import Crawler
-from ..lineage import get_narratives, get_derivatives, source_agenda
+from ..lineage import get_narratives, get_derivatives, source_agenda, compute_lineage
 from ..llm_config import LLMConfig
 from ..pipeline import run_pipeline
 from ..query import query as run_query
 from ..search_index import get_index
+
+# Date range helpers
+
+def _parse_range_date(range_str: str, article_date: str) -> bool:
+    """Return True if article_date falls within range_str."""
+    from datetime import datetime, timezone, timedelta
+
+    try:
+        article_dt = datetime.fromisoformat(article_date.replace("Z", "+00:00"))
+        if article_dt.tzinfo is None:
+            article_dt = article_dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return True
+
+    now = datetime.now(timezone.utc)
+    if range_str == "today":
+        since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return article_dt >= since
+    elif range_str == "yesterday":
+        since = now - timedelta(days=1)
+        since = since.replace(hour=0, minute=0, second=0, microsecond=0)
+        until = since + timedelta(days=1)
+        return since <= article_dt < until
+    elif range_str == "last_week":
+        since = now - timedelta(days=7)
+        return article_dt >= since
+    elif range_str == "last_month":
+        since = now - timedelta(days=30)
+        return article_dt >= since
+    elif range_str == "last_year":
+        since = now - timedelta(days=365)
+        return article_dt >= since
+    return True
 
 # Let uvicorn/asyncio handle SIGINT natively — the crawl's stop_requested
 # flag provides graceful shutdown, and sys.exit(0) from a signal handler
@@ -70,6 +103,22 @@ _crawl_state: dict[str, Any] = {
     "summarize": True,
 }
 _ws_connections: list[WebSocket] = []
+_crawl_mode: str = "forward"
+_consecutive_empty_ticks: int = 0
+_backward_time_range = "last_month"
+
+# Time range progression for backward mode
+_TIME_RANGE_PROGRESSION = ["day", "last_week", "last_month", "last_year", "all"]
+
+def _next_time_range(current: str) -> str:
+    """Return the next older time range in backward mode."""
+    try:
+        idx = _TIME_RANGE_PROGRESSION.index(current)
+        return _TIME_RANGE_PROGRESSION[min(idx + 1, len(_TIME_RANGE_PROGRESSION) - 1)]
+    except ValueError:
+        return "last_month"
+_crawl_mode: str = "forward"  # forward or backward
+_consecutive_empty_ticks: int = 0
 
 
 async def _drain_decompose(crawler):
@@ -263,20 +312,55 @@ async def _run_crawl_tick(
             _crawl_state["total"] = len(cfg.queries)
             _crawl_state["progress"] = 0
             await _broadcast({"type": "crawl_status", "data": _crawl_state})
+
+            # Expand time range in backward mode
+            srch_time_range = cfg.time_range
+            if _crawl_mode == "backward":
+                srch_time_range = _backward_time_range
+                _crawl_state["message"] = f"Searching (backward: {srch_time_range})..."
+
             for qi, q in enumerate(cfg.queries):
                 if _crawl_state.get("stop_requested"):
                     break
                 _crawl_state["progress"] = qi
-                _crawl_state["message"] = f"Searching: {q}"
+                _crawl_state["message"] = f"Searching ({srch_time_range}): {q}"
                 await _broadcast({"type": "crawl_status", "data": _crawl_state})
                 got = await asyncio.to_thread(
                     crawler.search_searxng, q,
-                    categories=cfg.categories, time_range=cfg.time_range,
+                    categories=cfg.categories, time_range=srch_time_range,
                     max_results=cfg.max_results, pages=cfg.pages,
                 )
                 await _drain_decompose(crawler)
                 search_added += got
-            print(f"[crawl] SearXNG: +{search_added} articles across {len(cfg.queries)} queries")
+            print(f"[crawl] SearXNG: +{search_added} articles across {len(cfg.queries)} queries (mode: {_crawl_mode})")
+
+        total_new = stats.get("feeds_added", 0) + stats.get("seeds_added", 0) + search_added
+
+        # --- Backward/forward mode auto-switch ---
+        if total_new > 0:
+            _consecutive_empty_ticks = 0
+            if _crawl_mode == "backward":
+                _crawl_mode = "forward"
+                _backward_time_range = "last_month"
+                print(f"[crawl] mode → forward (found {total_new} new articles)")
+        else:
+            _consecutive_empty_ticks += 1
+            if _crawl_mode == "forward" and _consecutive_empty_ticks >= 2:
+                _crawl_mode = "backward"
+                _backward_time_range = "last_month"
+                print("[crawl] no new articles → mode → backward")
+            elif _crawl_mode == "backward" and total_new == 0:
+                # Expand backward range further
+                _backward_time_range = _next_time_range(_backward_time_range)
+                if _backward_time_range == "all":
+                    _backward_time_range = "last_month"
+                    _consecutive_empty_ticks = 0
+                    print("[crawl] backward range exhausted, resetting to forward")
+                else:
+                    print(f"[crawl] backward range → {_backward_time_range}")
+
+        _crawl_state["mode"] = _crawl_mode
+        _crawl_state["consecutive_empty"] = _consecutive_empty_ticks
 
         if _crawl_state.get("stop_requested"):
             raise asyncio.CancelledError("Stop requested")
@@ -547,6 +631,65 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     def api_narratives():
         return data()["narratives"]
 
+    @app.get("/api/roles")
+    def api_roles(role: str = "", range: str = "all"):
+        """Return role figments grouped by text, with associated narrative stories.
+
+        `role` filter: who|what|where|why|how (empty = all roles).
+        `range` filter: today|yesterday|last_week|last_month|last_year|all (date range for WHEN).
+        """
+        all_figs = store.all()
+        narrs = get_narratives(store, all_figs=all_figs)
+
+        # Build narrative_id → member_article_ids mapping
+        narrative_members: dict[str, set[str]] = {}
+        narrative_by_id: dict[str, dict] = {}
+        for n in narrs:
+            narrative_members[n["narrative_id"]] = set(n["members"])
+            narrative_by_id[n["narrative_id"]] = n
+
+        # Date-range filter for WHEN tab: filter narratives by latest_article_date
+        def _in_range(n: dict) -> bool:
+            if range == "all" or not n.get("latest_article_date"):
+                return True
+            nd = _parse_range_date(range, n["latest_article_date"])
+            return nd is not False  # False means out of range
+
+        filtered_narrs = [n for n in narrs if _in_range(n)]
+        filtered_narr_ids = {n["narrative_id"] for n in filtered_narrs}
+
+        # Group role figments by (role, normalized_text)
+        groups: dict[tuple[str, str], dict[str, Any]] = {}
+        for f in all_figs:
+            r = f.meta.get("role")
+            if not r:
+                continue
+            if role and r != role:
+                continue
+            # Skip non-role figments (narratives, edges, etc.)
+            norm = f.meta.get("normalized", "")
+            key = (r, norm)
+            if key not in groups:
+                # Find which narratives this role figment belongs to
+                article_id = f.meta.get("article_id")
+                story_ids: list[str] = []
+                if article_id:
+                    for nid, members in narrative_members.items():
+                        if article_id in members and nid in filtered_narr_ids:
+                            story_ids.append(nid)
+                groups[key] = {
+                    "role": r,
+                    "text": norm or f.text,
+                    "count": 0,
+                    "story_ids": story_ids,
+                }
+            groups[key]["count"] += 1
+            if article_id and story_ids:
+                narrative_members.setdefault(story_ids[0], set())
+
+        out = sorted(groups.values(), key=lambda g: g["count"], reverse=True)
+        return {"roles": out, "range": range, "role_filter": role, "narrative_count": len(filtered_narrs)}
+
     @app.get("/api/sources")
     def api_sources():
         return data()["agenda"]
@@ -773,6 +916,48 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
                 })
         result["articles"] = articles
         return result
+
+    @app.post("/api/story/{nid}/find-more")
+    async def story_find_more(nid: str, request: Request):
+        """Search for more articles related to a narrative's entities."""
+        from urllib.parse import urlparse
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        query = body.get("query", "")
+        story_sources = body.get("sources", [])
+        max_results = body.get("max_results", 10)
+
+        if not query:
+            return {"error": "No query provided", "found": 0, "results": []}
+
+        results_list = []
+        found = 0
+
+        try:
+            cfg = SourceRegistry.load(sources)
+            if cfg.searxng and cfg.searxng.enabled:
+                from ..searxng import search as searxng_search, results_to_articles
+                sresults = searxng_search(cfg.searxng, query, max_results=max_results)
+                articles = results_to_articles(sresults[:max_results])
+                story_source_set = {_normalize_source(s) for s in story_sources}
+                for art in articles:
+                    sid = art.get("source_id") or urlparse(art.get("url", "")).netloc
+                    if story_sources and _normalize_source(sid) not in story_source_set:
+                        continue
+                    results_list.append({
+                        "title": art.get("title") or art.get("url", ""),
+                        "url": art.get("url", ""),
+                        "source": sid,
+                        "published": art.get("published", ""),
+                    })
+                    found += 1
+        except Exception as exc:
+            logging.getLogger(__name__).warning("find-more search error: %s", exc)
+
+        return {"found": found, "results": results_list[:max_results]}
 
     @app.get("/search")
     def search_page(request: Request):

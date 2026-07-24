@@ -56,6 +56,9 @@ def run_pipeline(
         for n in lineage_out.get("narratives", [])[:5]:
             log.info("    - %s: %s", n["narrative_id"][:8], n.get("title", "")[:60])
             log.info("      sources=%s  members=%d  frame_shift=%s", n.get("sources", []), len(n.get("members", [])), n.get("frame_shift", False))
+        # Link role figments to their narratives for tabbed UI
+        role_linked = lineage_mod.assign_roles_to_narratives(store, all_figs=all_figs)
+        log.info("  linked %d role figments to narratives", role_linked)
     except Exception as exc:
         log.error("Phase 2 FAILED: %s", exc, exc_info=True)
 
