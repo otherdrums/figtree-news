@@ -22,7 +22,6 @@ class SearxngConfig:
 
     url: str = "http://192.168.10.202:8081"
     enabled: bool = True
-    queries: list[str] = field(default_factory=list)
     categories: str = "news"
     time_range: str = "week"  # day | week | month | year | ""
     language: str = "en"
@@ -43,7 +42,6 @@ class SearxngConfig:
         return cls(
             url=str(sec.get("url", cls.url)),
             enabled=bool(sec.get("enabled", True)),
-            queries=[str(q) for q in sec.get("queries", [])],
             categories=str(sec.get("categories", cls.categories)),
             time_range=str(sec.get("time_range", cls.time_range)),
             language=str(sec.get("language", cls.language)),

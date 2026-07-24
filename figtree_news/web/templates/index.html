@@ -226,7 +226,7 @@
     <button class="btn btn-sm btn-secondary" onclick="addSeedRow()">+ Add Seed</button>
   </div>
 
-  <div class="control-card">
+<div class="control-card">
     <h3>Web Search (SearXNG)</h3>
     <div class="form-group">
       <label>
@@ -251,18 +251,6 @@
         <option value="general,news">General + News</option>
       </select>
     </div>
-    <div class="form-group">
-      <label for="searxng-queries">Search queries (one per line)</label>
-      <textarea id="searxng-queries" rows="5" placeholder="Israel Gaza ceasefire&#10;Ukraine Russia war&#10;AI regulation"></textarea>
-    </div>
-  </div>
-
-  <div class="control-card">
-    <h3>Actions</h3>
-    <button class="btn btn-primary" id="btn-crawl-once" onclick="runCrawl(false)">Run Once</button>
-    <button class="btn btn-primary" id="btn-crawl-continuous" onclick="runCrawl(true)">Start Continuous</button>
-    <button class="btn btn-danger" id="btn-crawl-stop" onclick="stopCrawl()" disabled>Stop</button>
-    <button class="btn btn-secondary" onclick="runPipeline()">Run Pipeline Only</button>
   </div>
 </div>
 
@@ -411,14 +399,8 @@ function addSeedRow(url) {
   div.innerHTML = '<input type="url" class="seed-url" placeholder="Seed URL" value="' + (url||'') + '"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button>';
   document.getElementById('seeds-list').appendChild(div);
 }
-var DEFAULT_FEEDS = {
-  'bbc': 'http://feeds.bbci.co.uk/news/rss.xml',
-  'aljazeera': 'https://www.aljazeera.com/xml/rss/all.xml',
-  'npr': 'https://feeds.npr.org/1001/rss.xml',
-  'guardian': 'https://www.theguardian.com/world/rss'
-};
 var SETTINGS_KEY = 'figtree-news-crawl-settings';
-var SETTING_IDS = ['max-articles', 'max-stories', 'since', 'before', 'compute-kv', 'interval', 'llm-enabled', 'searxng-enabled', 'searxng-time-range', 'searxng-categories', 'searxng-queries'];
+var SETTING_IDS = ['max-articles', 'max-stories', 'interval', 'llm-enabled', 'searxng-enabled', 'searxng-time-range', 'searxng-categories', 'smart-crawl'];
 function saveSettings() {
   var settings = {};
   SETTING_IDS.forEach(function(id) {
@@ -446,6 +428,35 @@ SETTING_IDS.forEach(function(id) {
   var el = document.getElementById(id);
   if (el) el.addEventListener('change', saveSettings);
 });
+// Persist crawl state to server (survives restarts)
+async function saveCrawlState() {
+  var state = {};
+  SETTING_IDS.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    state[id] = el.type === 'checkbox' ? el.checked : el.value;
+  });
+  try { await fetch('/api/crawl/state', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(state) }); } catch(e) {}
+}
+async function loadCrawlState() {
+  try {
+    var r = await fetch('/api/crawl/state');
+    var state = await r.json();
+    for (var key in state) {
+      var el = document.getElementById(key);
+      if (!el) continue;
+      if (el.type === 'checkbox') el.checked = state[key];
+      else el.value = state[key];
+    }
+    // Update mode indicator
+    var modeEl = document.getElementById('crawl-mode-indicator');
+    if (modeEl && state.mode) {
+      modeEl.textContent = state.mode;
+      modeEl.className = 'mode-badge ' + state.mode;
+    }
+  } catch(e) {}
+}
+loadCrawlState();
 // Override with server config if available
 fetch('/api/config').then(function(r) { return r.json(); }).then(function(cfg) {
   if (cfg.feeds && Object.keys(cfg.feeds).length) {
@@ -462,131 +473,8 @@ fetch('/api/config').then(function(r) { return r.json(); }).then(function(cfg) {
     el = document.getElementById('searxng-enabled'); if (el) el.checked = s.enabled !== false;
     el = document.getElementById('searxng-time-range'); if (el && s.time_range) el.value = s.time_range;
     el = document.getElementById('searxng-categories'); if (el && s.categories) el.value = s.categories;
-    el = document.getElementById('searxng-queries'); if (el && s.queries) el.value = s.queries.join('\n');
   }
 }).catch(function() {});
-
-// ---- Crawl control ----
-var WS_URL = 'ws://' + location.host + '/ws';
-var ws = null;
-var crawlRunning = false;
-var _autoRefreshEnabled = true;
-var _lastArticleCount = 0;
-var _contentRefreshTimer = null;
-
-function connectWS() {
-  ws = new WebSocket(WS_URL);
-  ws.onmessage = function(e) {
-    var msg = JSON.parse(e.data);
-    if (msg.type === 'crawl_status') updateCrawlUI(msg.data);
-    if (msg.type === 'content_update') refreshContent();
-  };
-  ws.onclose = function() { setTimeout(connectWS, 2000); };
-  ws.onerror = function() { ws.close(); };
-}
-connectWS();
-
-function refreshContent() {
-  if (_contentRefreshTimer) clearTimeout(_contentRefreshTimer);
-  _contentRefreshTimer = setTimeout(function() {
-    fetch('/api/stats').then(function(r) { return r.json(); }).then(function(s) {
-      var newCount = s.articles || 0;
-      if (newCount > _lastArticleCount) {
-        if (_autoRefreshEnabled) { location.reload(); }
-        else {
-          var banner = document.getElementById('new-articles-banner');
-          if (banner) { banner.querySelector('span').textContent = (newCount - _lastArticleCount) + ' new articles'; banner.style.display = 'flex'; }
-        }
-      }
-      _lastArticleCount = newCount;
-      updateStats();
-    }).catch(function() {});
-  }, 2000);
-}
-
-function updateCrawlUI(state) {
-  crawlRunning = state.running || state.continuous;
-  var b1 = document.getElementById('btn-crawl-once');
-  var b2 = document.getElementById('btn-crawl-continuous');
-  var b3 = document.getElementById('btn-crawl-stop');
-  if (b1) b1.disabled = crawlRunning;
-  if (b2) b2.disabled = crawlRunning;
-  if (b3) b3.disabled = !crawlRunning;
-  var cs = document.getElementById('crawl-status');
-  if (cs) {
-    var step = state.current_step || '';
-    cs.textContent = step === 'error' ? 'Error' : step === 'done' ? 'Done' : step === 'sleeping' ? 'Sleeping' : step === 'next_tick' ? 'Next tick...' : crawlRunning ? step : 'Idle';
-    cs.style.color = step === 'error' ? '#FF6B6B' : crawlRunning ? '#A6F0FF' : '';
-    if (state.mode && !crawlRunning) { cs.textContent = state.mode; cs.style.color = state.mode === 'backward' ? '#FFC107' : '#0BD6AB'; }
-  }
-  var isDone = state.current_step === 'done';
-  var isError = state.current_step === 'error';
-  var showPanel = state.running || state.current_step === 'sleeping' || state.current_step === 'next_tick' || isError || (!isDone && state.current_step !== 'idle');
-  var panel = document.getElementById('progress-panel');
-  if (panel) panel.style.display = showPanel ? 'block' : 'none';
-  var se = document.getElementById('progress-step');
-  if (se) { se.textContent = state.current_step || ''; se.style.color = isError ? '#FF6B6B' : ''; }
-  var me = document.getElementById('progress-message');
-  if (me) me.textContent = state.message || '';
-  if (state.stats && Object.keys(state.stats).length) {
-    var le = document.getElementById('progress-log');
-    if (le) le.innerHTML = JSON.stringify(state.stats, null, 2);
-  }
-  if (isError) {
-    var le = document.getElementById('progress-log');
-    if (le) le.innerHTML = '<span style="color:#FF6B6B">' + (state.message || 'Unknown error') + '</span>';
-  }
-  if (isDone && !state.continuous && panel) { setTimeout(function() { panel.style.display = 'none'; }, 5000); }
-}
-
-async function runCrawl(continuous) {
-  var feeds = {};
-  document.querySelectorAll('#feeds-list .feed-row').forEach(function(row) {
-    var s = row.querySelector('.feed-source').value.trim();
-    var u = row.querySelector('.feed-url').value.trim();
-    if (s && u) feeds[s] = u;
-  });
-  var seeds = [];
-  document.querySelectorAll('#seeds-list .seed-row').forEach(function(row) {
-    var u = row.querySelector('.seed-url').value.trim();
-    if (u) seeds.push(u);
-  });
-  var body = {
-    feeds: feeds, seeds: seeds,
-    max_articles: parseInt(document.getElementById('max-articles').value) || 40,
-    max_stories: parseInt(document.getElementById('max-stories').value) || 0,
-    since: document.getElementById('since') ? document.getElementById('since').value || '' : '',
-    before: document.getElementById('before') ? document.getElementById('before').value || '' : '',
-    summarize: document.getElementById('summarize') ? document.getElementById('summarize').checked : true,
-    continuous: continuous,
-    interval: parseInt(document.getElementById('interval').value) || 0,
-    llm_enabled: document.getElementById('llm-enabled') ? document.getElementById('llm-enabled').checked : false,
-    searxng_enabled: document.getElementById('searxng-enabled') ? document.getElementById('searxng-enabled').checked : true,
-    searxng_time_range: document.getElementById('searxng-time-range') ? document.getElementById('searxng-time-range').value : 'last_week',
-    searxng_categories: document.getElementById('searxng-categories') ? document.getElementById('searxng-categories').value : 'news',
-    searxng_queries: document.getElementById('searxng-queries') ? document.getElementById('searxng-queries').value : '',
-    smart_crawl: document.getElementById('smart-crawl') ? document.getElementById('smart-crawl').checked : true,
-  };
-  try {
-    var resp = await fetch('/api/crawl/run', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
-    var data = await resp.json();
-    if (data.error) alert(data.error);
-    else if (continuous) { var p = document.getElementById('progress-panel'); if (p) p.style.display = 'block'; }
-  } catch(e) { alert('Failed: ' + e.message); }
-}
-
-async function stopCrawl() {
-  try { await fetch('/api/crawl/stop', {method: 'POST'}); } catch(e) {}
-}
-
-async function runPipeline() {
-  try {
-    var resp = await fetch('/api/pipeline/run', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({summarize: true, brief: true}) });
-    var data = await resp.json();
-    alert('Pipeline: ' + JSON.stringify(data));
-    location.reload();
-  } catch(e) { alert('Failed: ' + e.message); }
-}
 
 function updateStats() {
   fetch('/api/stats').then(function(r) { return r.json(); }).then(function(s) {

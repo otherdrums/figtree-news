@@ -105,7 +105,8 @@ figtree-news search "AI regulation" --time-range day --max 10
 - Source pages with all articles + trust scores
 - Narrative pages with all source versions + frame-shift badges
 - Full-text search (SQLite FTS5) with date range filters
-- Slide-out control panel (600px) for all crawl + search settings
+- **Responsive slide-out control panel (900px max, 95vw)** for all crawl + search settings
+- **Sticky crawl action bar** at top of panel — Run Once / Start Continuous / Stop + mode indicator
 - WebSocket live updates — page auto-refreshes on new content
 - Dark theme (benthic.io style)
 
@@ -115,22 +116,27 @@ figtree-news search "AI regulation" --time-range day --max 10
 |---------|---------|-------------|
 | Max articles | 40 | Cap per tick |
 | Max stories | 0 (unlimited) | Cap narratives per pipeline run |
-| Since / Before | (empty) | Date range filter |
 | Pause between ticks | 0 | Seconds between ticks (0 = continuous) |
 | Compute KV cache | off | Cache K/V for boundary-based generation |
-| Generate summaries | on | Per-article summaries + world brief |
 | Enable LLM Review | off | External LLM cluster validation + self-correction |
+| Smart crawl | on | Auto-switch: forward when new articles found, backward when stuck |
 | **Web Search (SearXNG)** | | |
 | Enable web search | on | Toggle SearXNG search |
-| Time range | Last day | day / week / month / year / anytime |
+| Time range | Last week | day / week / month / year / anytime |
 | Categories | News | news / general / general,news |
-| Search queries | (from sources.json) | One per line; results ingested per tick |
+| **Search queries** | **auto** | **Keywords extracted from RSS article titles/text each tick** |
 
 ### Web Search (SearXNG)
 
 Articles from across the web via a local [SearXNG](https://docs.searxng.org/)
 instance. Full text fetched via trafilatura, deduplicated by URL + title.
 Unknown domains auto-registered as sources with `base_trust=0.7`.
+
+**Queries are auto-derived**: each crawl tick extracts top keywords from newly
+ingested RSS article titles/summaries (with built-in stopword filtering) and
+uses those as SearXNG queries. This ensures web coverage mirrors the topics
+currently appearing in feeds — no manual query maintenance needed. Falls back
+to generic news queries if no articles were added.
 
 ### Decomposition Engine
 
@@ -207,6 +213,7 @@ Demo ships with 15 sources (7 RSS + 8 YouTube).
 - **SQLite FTS5** — full-text search index (`{db}_fts.db`)
 - **seen_urls.json** — URL dedup (runtime, gitignored)
 - **KV cache** (optional) — quantized K/V for boundary-based generation
+- **sources.json** — feeds, seeds, SearXNG/LLM config, **and crawler state** (continuous mode, smart crawl, interval, mode, last run timestamp)
 
 ## CLI Reference
 

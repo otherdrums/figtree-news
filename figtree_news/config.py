@@ -9,7 +9,7 @@ a source's starting credibility is (e.g. Reuters 0.9, a random blog 0.5).
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 
 @dataclass
@@ -22,16 +22,41 @@ class SourceConfig:
     logo_url: str | None = None
 
 
+@dataclass
+class CrawlerState:
+    """Persisted crawler state saved in sources.json under 'crawler' key."""
+    continuous: bool = False
+    smart_crawl: bool = True
+    interval: int = 0
+    max_articles: int = 40
+    max_stories: int = 0
+    llm_enabled: bool = False
+    searxng_enabled: bool = True
+    searxng_time_range: str = "day"
+    searxng_categories: str = "news"
+    mode: str = "forward"  # "forward" | "backward"
+    consecutive_empty_ticks: int = 0
+    last_run: str | None = None  # ISO timestamp
+    backward_time_range: str = "day"
+
+
 class SourceRegistry:
     """Loads/saves a small JSON map of source_id -> SourceConfig."""
 
-    def __init__(self, sources: dict[str, SourceConfig], feeds: dict[str, str] = None,
-                 seeds: list[str] = None, searxng=None):
+    def __init__(
+        self,
+        sources: dict[str, SourceConfig],
+        feeds: dict[str, str] = None,
+        seeds: list[str] = None,
+        searxng=None,
+        crawler_state: CrawlerState = None,
+    ):
         self.sources = sources
         self.feeds = feeds or {}
         self.seeds = seeds or []
         # searxng: SearxngConfig instance (imported lazily to avoid circular deps)
         self.searxng = searxng
+        self.crawler_state = crawler_state or CrawlerState()
 
     @classmethod
     def load(cls, path: str) -> "SourceRegistry":
@@ -41,9 +66,9 @@ class SourceRegistry:
         except FileNotFoundError:
             return cls({}, {}, [])
         out: dict[str, SourceConfig] = {}
-        # Top-level "feeds"/"seeds"/"llm"/"searxng" keys are not sources.
+        # Top-level "feeds"/"seeds"/"llm"/"searxng"/"crawler" keys are not sources.
         for sid, spec in raw.items():
-            if sid in ("feeds", "seeds", "llm", "searxng") or not isinstance(spec, dict):
+            if sid in ("feeds", "seeds", "llm", "searxng", "crawler") or not isinstance(spec, dict):
                 continue
             out[sid] = SourceConfig(
                 source_id=sid,
@@ -58,7 +83,12 @@ class SourceRegistry:
         # Lazy import to avoid circular dependency
         from .searxng import SearxngConfig
         searxng = SearxngConfig.from_sources_json(path)
-        return cls(out, feeds, seeds, searxng)
+        crawler_data = raw.get("crawler", {})
+        if isinstance(crawler_data, dict):
+            crawler_state = CrawlerState(**{k: v for k, v in crawler_data.items() if k in CrawlerState.__dataclass_fields__})
+        else:
+            crawler_state = CrawlerState()
+        return cls(out, feeds, seeds, searxng, crawler_state)
 
     def save(self, path: str) -> None:
         raw = {
@@ -79,7 +109,6 @@ class SourceRegistry:
             raw["searxng"] = {
                 "url": self.searxng.url,
                 "enabled": self.searxng.enabled,
-                "queries": self.searxng.queries,
                 "categories": self.searxng.categories,
                 "time_range": self.searxng.time_range,
                 "language": self.searxng.language,
@@ -87,6 +116,8 @@ class SourceRegistry:
                 "pages": self.searxng.pages,
                 "timeout": self.searxng.timeout,
             }
+        if self.crawler_state:
+            raw["crawler"] = asdict(self.crawler_state)
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(raw, fh, indent=2)
 

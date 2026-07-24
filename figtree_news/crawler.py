@@ -19,6 +19,7 @@ import os
 import re
 import threading
 import time
+from collections import Counter
 from functools import lru_cache
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
@@ -30,6 +31,28 @@ from figtree import FigmentStore
 from .config import SourceRegistry
 from .ingest import _read_feed, ingest_articles
 from .search_index import get_index
+
+# Built-in stopwords for keyword extraction (zero deps)
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "from", "as", "is", "was", "are", "were", "been", "be", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "must", "can", "this", "that", "these", "those", "it", "its", "their", "they", "them", "he", "she", "we", "you", "i", "said", "says", "according", "report", "reports", "reported", "news", "new", "today", "week", "month", "year", "time", "times", "day", "days", "month", "months", "year", "years", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "first", "last", "next", "previous", "new", "old", "big", "small", "large", "great", "good", "bad", "high", "low", "long", "short", "early", "late", "right", "left", "up", "down", "out", "in", "over", "under", "again", "also", "just", "now", "then", "than", "more", "most", "some", "any", "all", "many", "much", "few", "less", "least", "very", "really", "such", "only", "even", "still", "yet", "already", "ever", "never", "always", "often", "sometimes", "usually", "rarely", "seldom", "daily", "weekly", "monthly", "yearly",
+}
+
+def _extract_keywords(texts: list[str], top_n: int = 10) -> list[str]:
+    """Extract top keywords from a list of texts using simple frequency analysis."""
+    if not texts:
+        return []
+    words = []
+    for text in texts:
+        if not text:
+            continue
+        # Split on non-alphanumeric, lowercase, filter
+        for w in re.split(r"[^a-zA-Z0-9]+", text.lower()):
+            if len(w) >= 4 and w not in _STOPWORDS and not w.isdigit():
+                words.append(w)
+    if not words:
+        return []
+    freq = Counter(words)
+    return [w for w, _ in freq.most_common(top_n)]
 
 USER_AGENT = "figtree-news/0.1 (+https://github.com/otherdrums/figtree-news; research crawler)"
 
@@ -80,6 +103,28 @@ def _extract_og_image(html: str) -> str | None:
     return None
 
 
+# Built-in stopwords for keyword extraction (zero external deps)
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "from", "as", "is", "was", "are", "were", "been", "be", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "must", "can", "this", "that", "these", "those", "it", "its", "their", "they", "them", "he", "she", "we", "you", "i", "said", "says", "according", "report", "reports", "news", "today", "yesterday", "week", "month", "year", "new", "old", "first", "last", "next", "previous", "current", "latest", "breaking", "update", "updates", "latest", "more", "most", "less", "many", "much", "some", "any", "all", "each", "every", "other", "another", "such", "only", "just", "also", "still", "even", "now", "then", "when", "where", "why", "how", "what", "who", "which", "whose", "whom", "there", "here", "out", "up", "down", "over", "under", "again", "once", "twice", "times", "time", "day", "days", "week", "weeks", "month", "months", "year", "years"
+}
+
+
+def _extract_keywords(articles: list[dict], top_n: int = 10) -> list[str]:
+    """Extract top keywords from article titles and text."""
+    from collections import Counter
+    import re
+    
+    word_counts = Counter()
+    for art in articles:
+        text = f"{art.get('title', '')} {art.get('text', '')}"
+        # Split on non-alphanumeric, lowercase
+        words = re.findall(r"[a-zA-Z]{3,}", text.lower())
+        for w in words:
+            if w not in _STOPWORDS:
+                word_counts[w] += 1
+    return [w for w, _ in word_counts.most_common(top_n)]
+
+
 class Crawler:
     def __init__(
         self,
@@ -109,6 +154,7 @@ class Crawler:
         self.seen: set[str] = self._load_seen()
         self._pending_decompose: list[str] = []
         self._pending_lock = threading.Lock()
+        self._new_articles: list[dict] = []  # Track newly ingested articles for keyword extraction
 
     # -- URL de-duplication ------------------------------------------------ #
     def _load_seen(self) -> set[str]:
@@ -236,6 +282,11 @@ class Crawler:
         
         if url:
             self._mark(url)
+        # Track for keyword extraction
+        title = article.get("title") or ""
+        text = article.get("text") or ""
+        if title or text:
+            self._new_articles.append({"title": title, "text": text})
         return True
 
     def drain_pending_decompose(self) -> list[str]:
@@ -362,6 +413,9 @@ class Crawler:
         self, feeds: dict[str, str], seeds: list[str], max_articles: int | None = None,
         since: str = "", before: str = "",
     ) -> dict:
+        # Reset tracking for new articles this run
+        self._new_articles.clear()
+        
         stats = {"feeds_added": 0, "seeds_added": 0, "search_added": 0, "sources": set()}
         # Spread the budget across feeds so no single source dominates a run.
         per = None
@@ -381,11 +435,22 @@ class Crawler:
             stats["seeds_added"] = got
             if budget is not None:
                 budget -= got
-        # SearXNG web search — shares the same budget
+        # SearXNG web search — use keywords from newly ingested RSS articles
         cfg = self.registry.searxng
-        if cfg and cfg.enabled and cfg.queries:
-            per_q = max(1, budget // len(cfg.queries)) if budget else cfg.max_results
-            for q in cfg.queries:
+        if cfg and cfg.enabled:
+            # Extract keywords from articles added this run
+            queries = _extract_keywords(self._new_articles, top_n=10)
+            # Fallback to generic news queries if no articles were added
+            if not queries:
+                queries = [
+                    "breaking news",
+                    "world news today",
+                    "technology news",
+                    "business markets",
+                    "politics government",
+                ]
+            per_q = max(1, budget // len(queries)) if budget else cfg.max_results
+            for q in queries:
                 if budget is not None and budget <= 0:
                     break
                 got = self.search_searxng(

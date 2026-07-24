@@ -104,6 +104,16 @@ figtree-news search "AI regulation" --time-range day --max 10
   returns matching articles for ingestion.
 - **Role API**: `GET /api/roles?role=who&range=last_week` returns entities
   grouped by role text with associated story IDs.
+- **SearXNG auto-queries**: No manual query list in config. Each crawl tick extracts
+  top keywords from newly ingested RSS article titles/summaries (built-in stopword
+  filtering) and uses those as SearXNG queries. Falls back to generic news queries
+  if no articles were added. This ensures web coverage mirrors feed topics.
+- **Persisted crawler state**: All control panel settings + runtime state (mode,
+  consecutive empty ticks, last run timestamp) saved to `sources.json` under
+  `"crawler"` key. Survives server restarts; multi-user ready.
+- **Responsive slide panel**: Control panel widened to `min(900px, 95vw)` with
+  horizontal scroll for long feed URLs. Sticky action bar at top keeps
+  Run Once / Start Continuous / Stop buttons always visible.
 
 ## Data Flow
 
@@ -123,11 +133,13 @@ RSS/SearXNG/Seeds → crawl_feed/search → ingest_articles (figmentize)
 
 ## Source Configuration
 
-`sources.json`:
+`sources.json` — **single unified config file** containing all settings:
 - `"feeds"`: `{source_id: rss_url}` — RSS/Atom feeds
 - `"sources"`: `{source_id: {name, base_trust, url, kind, logo_url}}` — source metadata
-- `"searxng"`: `{url, enabled, queries, categories, time_range, max_results, pages}`
+- `"searxng"`: `{url, enabled, categories, time_range, max_results, pages}` — SearXNG settings
+  - **No `queries` field** — queries are auto-derived from RSS article keywords each tick
 - `"llm"`: `{url, model, timeout, enabled, ...}` — external LLM config
+- `"crawler"`: `{continuous, smart_crawl, interval, max_articles, max_stories, llm_enabled, searxng_enabled, searxng_time_range, searxng_categories, mode, consecutive_empty_ticks, last_run, backward_time_range}` — **persisted crawler state** (survives restarts)
 - Unknown domains auto-registered with `base_trust=0.7`
 
 ## Common Pitfalls

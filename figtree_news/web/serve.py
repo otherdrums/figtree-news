@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import time
 import warnings
 from typing import Any
@@ -21,7 +22,21 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 
 warnings.filterwarnings("ignore", message=".*_check_is_size.*")
 warnings.filterwarnings("ignore", category=FutureWarning, module="bitsandbytes")
+
+# Configure logging BEFORE importing modules that create loggers
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+# Reduce noise from third-party libraries
 logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -310,10 +325,24 @@ async def _run_crawl_tick(
         # SearXNG web search — independent budget (not consumed by feeds)
         search_added = 0
         cfg = registry.searxng
-        if cfg and cfg.enabled and cfg.queries:
+        if cfg and cfg.enabled:
             _crawl_state["current_step"] = "searching"
-            _crawl_state["message"] = f"Searching {len(cfg.queries)} queries..."
-            _crawl_state["total"] = len(cfg.queries)
+            
+            # Extract keywords from articles added this tick
+            from figtree_news.crawler import _extract_keywords
+            queries = _extract_keywords(crawler._new_articles, top_n=10)
+            # Fallback to generic news queries if no articles were added
+            if not queries:
+                queries = [
+                    "breaking news",
+                    "world news today",
+                    "technology news",
+                    "business markets",
+                    "politics government",
+                ]
+            
+            _crawl_state["message"] = f"Searching {len(queries)} queries..."
+            _crawl_state["total"] = len(queries)
             _crawl_state["progress"] = 0
             await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
@@ -323,7 +352,7 @@ async def _run_crawl_tick(
                 srch_time_range = _backward_time_range
                 _crawl_state["message"] = f"Searching (backward: {srch_time_range})..."
 
-            for qi, q in enumerate(cfg.queries):
+            for qi, q in enumerate(queries):
                 if _crawl_state.get("stop_requested"):
                     break
                 _crawl_state["progress"] = qi
@@ -336,7 +365,7 @@ async def _run_crawl_tick(
                 )
                 await _drain_decompose(crawler)
                 search_added += got
-            print(f"[crawl] SearXNG: +{search_added} articles across {len(cfg.queries)} queries (mode: {_crawl_mode})")
+            print(f"[crawl] SearXNG: +{search_added} articles across {len(queries)} queries (mode: {_crawl_mode})")
 
         total_new = stats.get("feeds_added", 0) + stats.get("seeds_added", 0) + search_added
 
@@ -910,13 +939,29 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
             cfg["searxng"] = {
                 "url": registry.searxng.url,
                 "enabled": registry.searxng.enabled,
-                "queries": registry.searxng.queries,
                 "categories": registry.searxng.categories,
                 "time_range": registry.searxng.time_range,
                 "max_results": registry.searxng.max_results,
                 "pages": registry.searxng.pages,
             }
         return cfg
+
+    @app.get("/api/crawl/state")
+    def api_crawl_state():
+        """Return persisted crawler state from sources.json."""
+        return registry.crawler_state.__dict__ if hasattr(registry.crawler_state, '__dict__') else {}
+
+    @app.post("/api/crawl/state")
+    async def api_crawl_state_save(request: Request):
+        """Update persisted crawler state in sources.json."""
+        body = await request.json()
+        # Update crawler_state fields
+        for key, value in body.items():
+            if hasattr(registry.crawler_state, key):
+                setattr(registry.crawler_state, key, value)
+        # Persist to sources.json
+        registry.save(sources)
+        return {"status": "ok"}
 
     @app.get("/api/search")
     def api_search(q: str = "", range: str = "all", sort: str = "date_desc", page: int = 1, limit: int = 20):
