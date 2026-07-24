@@ -24,10 +24,22 @@ figtree_news/
 ├── ingest.py           # Feed/article → figments with provenance
 ├── crawler.py          # RSS + SearXNG + BFS link-follower (thread-safe pending queue)
 ├── pipeline.py         # 8-phase orchestration: trust → lineage → eval → summaries → brief
-├── lineage.py          # Entity-based narrative clustering + frame shift + derivative edges
-├── trust.py            # Source trust propagation
+├── lineage.py          # Entity-based narrative clustering + frame shift + derivative + role assignment
+├── trust.py            # Source trust propagation (accepts all_figs to avoid redundant store.all())
 ├── decompose.py        # WHO/WHAT/WHERE/WHEN/WHY/HOW extraction (3 background workers)
 ├── cogitate.py         # Periodic consolidation + insight generation
+├── evaluate.py         # External LLM: cluster validation, frame shift, brief review
+├── correct.py          # Self-correction: confirmation threshold + auto-apply
+├── llm_config.py       # External LLM configuration
+├── summarize_news.py   # Per-article summaries + world brief (accepts all_figs)
+├── query.py            # Embed query → nearest figments → generate
+├── search_index.py     # SQLite FTS5 full-text search
+├── export.py           # Graph export as JSON
+└── web/
+    ├── serve.py        # FastAPI: HTML pages + JSON API + WebSocket + background crawl loop
+    ├── templates/      # Jinja2 HTML (index.html with tabbed UI: Top Stories | WHO/WHAT/WHERE/WHY/HOW)
+    └── static/         # CSS (dark theme)
+```
 ├── evaluate.py         # External LLM: cluster validation, frame shift, brief review
 ├── correct.py          # Self-correction: confirmation threshold + auto-apply
 ├── llm_config.py       # External LLM configuration
@@ -73,13 +85,34 @@ figtree-news search "AI regulation" --time-range day --max 10
   async caller drains it via `drain_pending_decompose()` after `to_thread` returns
 - **Tests**: CPU-only, use `tmp_path` for isolation
 
+## Key Design Details (v2)
+
+- **Every article = a story**: `lineage.py` no longer filters out single-article clusters.
+  Every article becomes a `narrative:{key}` figment, whether solo or multi-source.
+- **Role-to-narrative linkage**: After lineage re-computes, `assign_roles_to_narratives()`
+  stamps each role figment with `story_id` pointing to its parent narrative, enabling
+  the WHO/WHAT/WHERE/WHY/HOW tabbed views.
+- **Recency of coverage sorting**: Narratives sorted by `latest_article_date DESC`
+  (newest article in the story floats to top, not creation date).
+- **Tabbed front page**: Top Stories (default) | WHO | WHAT | WHERE | WHY | HOW.
+  WHEN date range selector (today/yesterday/last_week/last_month/last_year/all) filters all tabs.
+- **Smart crawl mode**: Forward mode (current feeds) auto-switches to backward mode
+  (expanded time range: day → week → month → year → all) when no new articles found
+  for 2 consecutive ticks. Toggled in control panel.
+- **Find More**: Each story card has a "Find More" button that POSTs to
+  `/api/story/{nid}/find-more` to search SearXNG for the story's entities and
+  returns matching articles for ingestion.
+- **Role API**: `GET /api/roles?role=who&range=last_week` returns entities
+  grouped by role text with associated story IDs.
+
 ## Data Flow
 
 ```
 RSS/SearXNG/Seeds → crawl_feed/search → ingest_articles (figmentize)
     → crawl_seeds → pipeline:
         Phase 1: Trust propagation
-        Phase 2: Lineage (entity clustering → narratives)
+        Phase 2: Lineage (entity clustering → narratives; single-article = valid story)
+        Phase 2: assign_roles_to_narratives (role figments → story_id)
         Phase 2.5: LLM labeling (if enabled)
         Phase 3-4: LLM eval + correction (if enabled)
         Phase 5: Article summaries
