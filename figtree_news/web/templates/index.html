@@ -446,20 +446,24 @@ SETTING_IDS.forEach(function(id) {
   var el = document.getElementById(id);
   if (el) el.addEventListener('change', saveSettings);
 });
+// Always show defaults first, then override from server config
+Object.entries(DEFAULT_FEEDS).forEach(function(entry) { addFeedRow(entry[0], entry[1]); });
 fetch('/api/config').then(function(r) { return r.json(); }).then(function(cfg) {
   if (cfg.feeds && Object.keys(cfg.feeds).length) {
     document.getElementById('feeds-list').innerHTML = '';
     Object.entries(cfg.feeds).forEach(function(entry) { addFeedRow(entry[0], entry[1]); });
-  } else {
-    Object.entries(DEFAULT_FEEDS).forEach(function(entry) { addFeedRow(entry[0], entry[1]); });
   }
-  if (cfg.seeds) cfg.seeds.forEach(function(url) { addSeedRow(url); });
+  if (cfg.seeds && cfg.seeds.length) {
+    document.getElementById('seeds-list').innerHTML = '';
+    cfg.seeds.forEach(function(url) { addSeedRow(url); });
+  }
   if (cfg.searxng) {
     var s = cfg.searxng;
-    document.getElementById('searxng-enabled').checked = s.enabled !== false;
-    document.getElementById('searxng-time-range').value = s.time_range || 'last_week';
-    document.getElementById('searxng-categories').value = s.categories || 'news';
-    document.getElementById('searxng-queries').value = (s.queries || []).join('\n');
+    var el;
+    el = document.getElementById('searxng-enabled'); if (el) el.checked = s.enabled !== false;
+    el = document.getElementById('searxng-time-range'); if (el) el.value = s.time_range || 'last_week';
+    el = document.getElementById('searxng-categories'); if (el) el.value = s.categories || 'news';
+    el = document.getElementById('searxng-queries'); if (el && s.queries) el.value = s.queries.join('\n');
   }
 }).catch(function() {});
 
