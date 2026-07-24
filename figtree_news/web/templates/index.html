@@ -513,10 +513,10 @@ fetch('/api/config').then(r => r.json()).then(cfg => {
     Object.entries(cfg.feeds).forEach(([s, u]) => addFeedRow(s, u));
   }
   if (cfg.seeds) cfg.seeds.forEach(u => addSeedRow(u));
-  if (cfg.llm && !localStorage.getItem(SETTINGS_KEY)) {
+  if (cfg.llm) {
     document.getElementById('llm-enabled').checked = cfg.llm.enabled || false;
   }
-  if (cfg.searxng && !localStorage.getItem(SETTINGS_KEY)) {
+  if (cfg.searxng) {
     document.getElementById('searxng-enabled').checked = cfg.searxng.enabled !== false;
     document.getElementById('searxng-time-range').value = cfg.searxng.time_range || 'week';
     document.getElementById('searxng-categories').value = cfg.searxng.categories || 'news';
