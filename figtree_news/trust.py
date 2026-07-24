@@ -14,18 +14,18 @@ from typing import Any
 from figtree import FigmentStore, Figtree
 
 
-def _build_graph(store: FigmentStore) -> Figtree:
-    figs = store.all()
+def _build_graph(store: FigmentStore, *, all_figs: list | None = None) -> Figtree:
+    figs = all_figs if all_figs is not None else store.all()
     return Figtree(figs, store=store)
 
 
-def update_trust(store: FigmentStore, dedupe: bool = False) -> dict[str, Any]:
+def update_trust(store: FigmentStore, *, all_figs: list | None = None, dedupe: bool = False) -> dict[str, Any]:
     """Build edges, analyze sources, and persist adjusted trust scores.
 
     Returns ``{"analysis": {...}, "updates": [...]}`` where ``updates`` is the
     list returned by ``Figtree.propagate_trust`` (one entry per source).
     """
-    graph = _build_graph(store)
+    graph = _build_graph(store, all_figs=all_figs)
     if dedupe:
         graph.deduplicate()
     graph.create_edges()

@@ -150,7 +150,7 @@ async def _broadcast(msg: dict[str, Any]):
 
 
 async def _run_crawl_tick(
-    db: str,
+    store: FigmentStore,
     sources_path: str,
     feeds: dict[str, str],
     seeds: list[str],
@@ -185,7 +185,6 @@ async def _run_crawl_tick(
             _gen_cache["gen"] = FigmentGenerator(model, tokenizer)
             print(f"[crawl] model loaded ({model_id.rsplit('/',1)[-1]})")
 
-        store: FigmentStore = connect(db)
         registry = SourceRegistry.load(sources_path)
 
         kv_manager = None
@@ -337,7 +336,7 @@ async def _run_crawl_tick(
 
 
 async def _run_continuous_crawl(
-    db: str,
+    store: FigmentStore,
     sources_path: str,
     feeds: dict[str, str],
     seeds: list[str],
@@ -365,7 +364,7 @@ async def _run_continuous_crawl(
         print(f"[crawl] tick #{tick_num} starting")
         try:
             await _run_crawl_tick(
-                db, sources_path, feeds, seeds, max_articles, summarize, compute_kv, model_id,
+                store, sources_path, feeds, seeds, max_articles, summarize, compute_kv, model_id,
                 max_stories=max_stories, since=since, before=before, llm_enabled=llm_enabled,
             )
         except asyncio.CancelledError:
@@ -637,14 +636,14 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         if continuous:
             task = asyncio.create_task(
                 _run_continuous_crawl(
-                    db, sources, feeds, seeds, max_articles, summarize, compute_kv, model_id, interval,
+                    store, sources, feeds, seeds, max_articles, summarize, compute_kv, model_id, interval,
                     max_stories=max_stories, since=since, before=before, llm_enabled=llm_enabled,
                 )
             )
         else:
             task = asyncio.create_task(
                 _run_crawl_tick(
-                    db, sources, feeds, seeds, max_articles, summarize, compute_kv, model_id,
+                    store, sources, feeds, seeds, max_articles, summarize, compute_kv, model_id,
                     max_stories=max_stories, since=since, before=before, llm_enabled=llm_enabled,
                 )
             )
@@ -720,10 +719,19 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         except Exception as e:
             return {"error": str(e)}
 
+    _stats_cache: dict[str, Any] = {}
+
     @app.get("/api/stats")
     def api_stats():
         """Quick store stats for dashboard."""
-        return _get_stats(store)
+        try:
+            s = _get_stats(store)
+            _stats_cache.clear()
+            _stats_cache.update(s)
+            return s
+        except Exception as exc:
+            logging.getLogger(__name__).warning("api_stats failed, returning cache: %s", exc)
+            return dict(_stats_cache) if _stats_cache else {"articles": 0, "narratives": 0, "derivatives": 0, "sources": 0, "has_brief": False, "last_updated": ""}
 
     @app.get("/api/config")
     def api_config():

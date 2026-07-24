@@ -15,21 +15,21 @@ from figtree import Figment, FigmentGenerator, FigmentStore
 from .lineage import get_narratives
 
 
-def _article_images(store: FigmentStore) -> list[Figment]:
+def _article_images(store: FigmentStore, *, all_figs: list | None = None) -> list[Figment]:
     return [
         f
-        for f in store.all()
+        for f in (all_figs if all_figs is not None else store.all())
         if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()
     ]
 
 
 def ensure_article_summaries(
-    model, tokenizer, store: FigmentStore, limit: int = 500
+    model, tokenizer, store: FigmentStore, *, all_figs: list | None = None, limit: int = 500
 ) -> dict[str, Any]:
     gen = FigmentGenerator(model, tokenizer)
     done = 0
     updated: list[Figment] = []
-    for f in _article_images(store):
+    for f in _article_images(store, all_figs=all_figs):
         if f.meta.get("summary"):
             continue
         result = gen.generate(
@@ -47,14 +47,14 @@ def ensure_article_summaries(
 
 
 def build_world_brief(
-    model, tokenizer, store: FigmentStore, top_n: int = 8
+    model, tokenizer, store: FigmentStore, *, all_figs: list | None = None, top_n: int = 8
 ) -> dict[str, Any]:
     """Generate a combined brief over the top narratives; persist as a figment."""
     narratives = get_narratives(store)[:top_n]
     members: list[str] = []
     for n in narratives:
         members.extend(n["members"][:2])
-    figs = {f.figment_id: f for f in _article_images(store)}
+    figs = {f.figment_id: f for f in _article_images(store, all_figs=all_figs)}
     selected = [figs[mid] for mid in dict.fromkeys(members) if mid in figs][:top_n]
     if not selected:
         print(f"[brief] no articles selected for brief generation")
