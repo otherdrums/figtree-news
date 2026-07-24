@@ -220,14 +220,9 @@
 
   <div class="control-card">
     <h3>Feeds &amp; Seeds</h3>
-    <div id="feeds-list" class="feed-list">
-      <div class="feed-row"><input type="text" class="feed-source" placeholder="source" value="bbc"><input type="url" class="feed-url" placeholder="Feed URL" value="http://feeds.bbci.co.uk/news/rss.xml"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button></div>
-      <div class="feed-row"><input type="text" class="feed-source" placeholder="source" value="aljazeera"><input type="url" class="feed-url" placeholder="Feed URL" value="https://www.aljazeera.com/xml/rss/all.xml"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button></div>
-      <div class="feed-row"><input type="text" class="feed-source" placeholder="source" value="npr"><input type="url" class="feed-url" placeholder="Feed URL" value="https://feeds.npr.org/1001/rss.xml"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button></div>
-      <div class="feed-row"><input type="text" class="feed-source" placeholder="source" value="guardian"><input type="url" class="feed-url" placeholder="Feed URL" value="https://www.theguardian.com/world/rss"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button></div>
-    </div>
+    <div id="feeds-list" class="feed-list">{{ feeds_html|safe }}</div>
     <button class="btn btn-sm btn-secondary" onclick="addFeedRow()">+ Add Feed</button>
-    <div id="seeds-list" class="feed-list"></div>
+    <div id="seeds-list" class="feed-list">{{ seeds_html|safe }}</div>
     <button class="btn btn-sm btn-secondary" onclick="addSeedRow()">+ Add Seed</button>
   </div>
 

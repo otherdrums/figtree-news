@@ -38,6 +38,10 @@ from ..pipeline import run_pipeline
 from ..query import query as run_query
 from ..search_index import get_index
 
+def _e(s: str) -> str:
+    """Escape HTML special characters."""
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
 # Date range helpers
 
 def _parse_range_date(range_str: str, article_date: str) -> bool:
@@ -544,6 +548,23 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     @app.get("/")
     def index(request: Request):
         d = data()
+        feeds_html = ""
+        for sid, url in registry.feeds.items():
+            feeds_html += (
+                '<div class="feed-row">'
+                '<input type="text" class="feed-source" placeholder="source" value="' + _e(sid) + '">'
+                '<input type="url" class="feed-url" placeholder="Feed URL" value="' + _e(url) + '">'
+                '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button>'
+                '</div>'
+            )
+        seeds_html = ""
+        for url in registry.seeds:
+            seeds_html += (
+                '<div class="seed-row">'
+                '<input type="url" class="seed-url" placeholder="Seed URL" value="' + _e(url) + '">'
+                '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button>'
+                '</div>'
+            )
         return _render(request,
             "index.html",
             {
@@ -558,6 +579,8 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
                     key=lambda f: f.meta.get("first_seen", ""),
                     reverse=True,
                 )[:30],
+                "feeds_html": feeds_html,
+                "seeds_html": seeds_html,
             },
         )
 
