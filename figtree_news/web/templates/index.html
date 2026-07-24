@@ -3,7 +3,6 @@
 {% block content %}
 <div class="container">
 
-  <!-- World Brief -->
   {% if brief %}
   <section class="brief featured">
     <span class="kicker">World Brief</span>
@@ -11,7 +10,6 @@
   </section>
   {% endif %}
 
-  <!-- Tab Navigation -->
   <nav class="tab-nav">
     <button class="tab-btn active" data-tab="stories" onclick="switchTab('stories')">Top Stories</button>
     <button class="tab-btn" data-tab="who" onclick="switchTab('who')">Who</button>
@@ -21,7 +19,6 @@
     <button class="tab-btn" data-tab="how" onclick="switchTab('how')">How</button>
   </nav>
 
-  <!-- WHEN Date Range Selector -->
   <div class="when-bar">
     <label for="when-range" class="when-label">When:</label>
     <select id="when-range" onchange="changeWhenRange()">
@@ -35,7 +32,6 @@
     <span id="when-count" class="when-count"></span>
   </div>
 
-  <!-- Top Stories Tab -->
   <section id="tab-stories" class="tab-panel active">
     <h2 class="section-title">
       <span class="section-kicker">Top Stories</span>
@@ -141,7 +137,6 @@
     {% endif %}
   </section>
 
-  <!-- Role Tabs (loaded dynamically) -->
   {% for role_name, role_label in [('who','Who'),('what','What'),('where','Where'),('why','Why'),('how','How')] %}
   <section id="tab-{{ role_name }}" class="tab-panel" style="display:none;">
     <h2 class="section-title">
@@ -149,12 +144,11 @@
       Entities &amp; stories
     </h2>
     <div id="roles-{{ role_name }}" class="roles-list">
-      <p class="muted">Loading…</p>
+      <p class="muted">Loading&hellip;</p>
     </div>
   </section>
   {% endfor %}
 
-  <!-- Source Trust Board -->
   <section>
     <h2 class="section-title">Source Trust Board</h2>
     <div class="overflow-table">
@@ -181,149 +175,14 @@
   </section>
 </div>
 
-<!-- Find More Modal -->
 <div id="find-more-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeFindMore()">
   <div class="modal">
     <h3>Find More Coverage</h3>
-    <p id="find-more-status">Searching…</p>
+    <p id="find-more-status">Searching&hellip;</p>
     <div id="find-more-results"></div>
     <button class="btn btn-secondary" onclick="closeFindMore()">Close</button>
   </div>
 </div>
-
-{% endblock %}
-
-{% block extra_js %}
-<script>
-  // Tab switching
-  function switchTab(tab) {
-    document.querySelectorAll('.tab-panel').forEach(p => p.style.display = 'none');
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    var panel = document.getElementById('tab-' + tab);
-    if (panel) panel.style.display = 'block';
-    var btn = document.querySelector('.tab-btn[data-tab="' + tab + '"]');
-    if (btn) btn.classList.add('active');
-    // Load role tab content dynamically
-    if (tab !== 'stories') {
-      loadRoles(tab);
-    }
-  }
-
-  // WHEN range change
-  function changeWhenRange() {
-    var range = document.getElementById('when-range').value;
-    window.location.href = '?range=' + encodeURIComponent(range);
-  }
-
-  // Load role entities from API
-  async function loadRoles(role) {
-    var container = document.getElementById('roles-' + role);
-    if (!container) return;
-    var range = document.getElementById('when-range').value;
-    try {
-      var resp = await fetch('/api/roles?role=' + role + '&range=' + encodeURIComponent(range));
-      var data = await resp.json();
-      renderRoles(container, data.roles, role);
-      document.getElementById('when-count').textContent = data.narrative_count + ' story' + (data.narrative_count !== 1 ? 's' : '');
-    } catch (e) {
-      container.innerHTML = '<p class="muted">Failed to load.</p>';
-    }
-  }
-
-  function renderRoles(container, roles, role) {
-    if (!roles || roles.length === 0) {
-      container.innerHTML = '<p class="muted">No ' + role + ' entities found.</p>';
-      return;
-    }
-    var html = '<ul class="entity-list">';
-    roles.forEach(function(g) {
-      html += '<li class="entity-item">';
-      html += '<span class="entity-text">' + escapeHtml(g.text) + '</span>';
-      html += '<span class="entity-count">' + g.count + ' figment' + (g.count !== 1 ? 's' : '') + '</span>';
-      if (g.story_ids && g.story_ids.length > 0) {
-        html += '<div class="entity-stories">';
-        g.story_ids.forEach(function(sid) {
-          html += '<a href="/narrative/' + sid + '" class="story-link">View story</a>';
-        });
-        html += '</div>';
-      }
-      html += '</li>';
-    });
-    html += '</ul>';
-    container.innerHTML = html;
-  }
-
-  function escapeHtml(str) {
-    var div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
-  // Find More
-  async function findMore(narrativeId, sources, entities) {
-    var modal = document.getElementById('find-more-modal');
-    var status = document.getElementById('find-more-status');
-    var results = document.getElementById('find-more-results');
-    modal.style.display = 'flex';
-    status.textContent = 'Searching for more coverage…';
-    results.innerHTML = '';
-
-    var query = entities && entities.length > 0 ? entities.slice(0, 5).join(' AND ') : narrativeId;
-    try {
-      var resp = await fetch('/api/story/' + narrativeId + '/find-more', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({query: query, sources: sources, max_results: 10})
-      });
-      var data = await resp.json();
-      if (data.error) {
-        status.textContent = 'Error: ' + data.error;
-        return;
-      }
-      status.textContent = 'Found ' + (data.found || 0) + ' new article' + ((data.found || 0) !== 1 ? 's' : '') + '.';
-      if (data.results && data.results.length > 0) {
-        results.innerHTML = '<ul>' + data.results.map(function(r) {
-          return '<li><a href="' + (r.url || '#') + '" target="_blank">' + escapeHtml(r.title || r.url || 'New article') + '</a> — <span class="source-badge">' + escapeHtml(r.source || '') + '</span></li>';
-        }).join('') + '</ul>';
-      }
-    } catch (e) {
-      status.textContent = 'Search failed.';
-    }
-  }
-
-  function closeFindMore() {
-    document.getElementById('find-more-modal').style.display = 'none';
-  }
-
-  // Apply date range from URL params on page load
-  (function() {
-    var params = new URLSearchParams(window.location.search);
-    var range = params.get('range');
-    if (range) {
-      var sel = document.getElementById('when-range');
-      if (sel) sel.value = range;
-    }
-    // Load the default tab's roles if needed
-    var activeTab = document.querySelector('.tab-btn.active');
-    if (activeTab && activeTab.dataset.tab !== 'stories') {
-      loadRoles(activeTab.dataset.tab);
-    }
-  })();
-
-  // Parse relative dates
-  document.querySelectorAll('time.published-date').forEach(function(el) {
-    var dt = el.getAttribute('datetime');
-    if (!dt) return;
-    var d = new Date(dt);
-    if (isNaN(d)) return;
-    var now = new Date();
-    var diff = (now - d) / 1000;
-    if (diff < 3600) el.textContent = Math.round(diff/60) + ' min ago';
-    else if (diff < 86400) el.textContent = Math.round(diff/3600) + ' hr ago';
-    else if (diff < 604800) el.textContent = Math.round(diff/86400) + ' days ago';
-    else el.textContent = d.toLocaleDateString();
-  });
-</script>
 {% endblock %}
 
 {% block control_panel %}
@@ -360,7 +219,7 @@
   </div>
 
   <div class="control-card">
-    <h3>Feeds & Seeds</h3>
+    <h3>Feeds &amp; Seeds</h3>
     <div id="feeds-list" class="feed-list"></div>
     <button class="btn btn-sm btn-secondary" onclick="addFeedRow()">+ Add Feed</button>
     <div id="seeds-list" class="feed-list"></div>
@@ -418,4 +277,324 @@
   </div>
   <div class="progress-log" id="progress-log"></div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function switchTab(tab) {
+  document.querySelectorAll('.tab-panel').forEach(function(p) { p.style.display = 'none'; });
+  document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+  var panel = document.getElementById('tab-' + tab);
+  if (panel) panel.style.display = 'block';
+  var btn = document.querySelector('.tab-btn[data-tab="' + tab + '"]');
+  if (btn) btn.classList.add('active');
+  if (tab !== 'stories') { loadRoles(tab); }
+}
+
+function changeWhenRange() {
+  var range = document.getElementById('when-range').value;
+  window.location.href = '?range=' + encodeURIComponent(range);
+}
+
+async function loadRoles(role) {
+  var container = document.getElementById('roles-' + role);
+  if (!container) return;
+  var range = document.getElementById('when-range').value;
+  try {
+    var resp = await fetch('/api/roles?role=' + role + '&range=' + encodeURIComponent(range));
+    var data = await resp.json();
+    renderRoles(container, data.roles, role);
+    var cnt = document.getElementById('when-count');
+    if (cnt) cnt.textContent = data.narrative_count + ' story' + (data.narrative_count !== 1 ? 's' : '');
+  } catch (e) {
+    container.innerHTML = '<p class="muted">Failed to load.</p>';
+  }
+}
+
+function renderRoles(container, roles, role) {
+  if (!roles || roles.length === 0) {
+    container.innerHTML = '<p class="muted">No ' + role + ' entities found.</p>';
+    return;
+  }
+  var html = '<ul class="entity-list">';
+  roles.forEach(function(g) {
+    html += '<li class="entity-item">';
+    html += '<span class="entity-text">' + escapeHtml(g.text) + '</span>';
+    html += '<span class="entity-count">' + g.count + ' figment' + (g.count !== 1 ? 's' : '') + '</span>';
+    if (g.story_ids && g.story_ids.length > 0) {
+      html += '<div class="entity-stories">';
+      g.story_ids.forEach(function(sid) {
+        html += '<a href="/narrative/' + sid + '" class="story-link">View story</a>';
+      });
+      html += '</div>';
+    }
+    html += '</li>';
+  });
+  html += '</ul>';
+  container.innerHTML = html;
+}
+
+function escapeHtml(str) {
+  var div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+async function findMore(narrativeId, sources, entities) {
+  var modal = document.getElementById('find-more-modal');
+  var status = document.getElementById('find-more-status');
+  var results = document.getElementById('find-more-results');
+  modal.style.display = 'flex';
+  status.textContent = 'Searching for more coverage&hellip;';
+  results.innerHTML = '';
+  var query = entities && entities.length > 0 ? entities.slice(0, 5).join(' AND ') : narrativeId;
+  try {
+    var resp = await fetch('/api/story/' + narrativeId + '/find-more', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: query, sources: sources, max_results: 10})
+    });
+    var data = await resp.json();
+    if (data.error) { status.textContent = 'Error: ' + data.error; return; }
+    status.textContent = 'Found ' + (data.found || 0) + ' new article' + ((data.found || 0) !== 1 ? 's' : '') + '.';
+    if (data.results && data.results.length > 0) {
+      results.innerHTML = '<ul>' + data.results.map(function(r) {
+        return '<li><a href="' + (r.url || '#') + '" target="_blank">' + escapeHtml(r.title || r.url || 'New article') + '</a> &mdash; <span class="source-badge">' + escapeHtml(r.source || '') + '</span></li>';
+      }).join('') + '</ul>';
+    }
+  } catch (e) {
+    status.textContent = 'Search failed.';
+  }
+}
+
+function closeFindMore() {
+  document.getElementById('find-more-modal').style.display = 'none';
+}
+
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var range = params.get('range');
+  if (range) {
+    var sel = document.getElementById('when-range');
+    if (sel) sel.value = range;
+  }
+  var activeTab = document.querySelector('.tab-btn.active');
+  if (activeTab && activeTab.dataset.tab !== 'stories') {
+    loadRoles(activeTab.dataset.tab);
+  }
+})();
+
+// Date relativization
+document.querySelectorAll('time.published-date').forEach(function(el) {
+  var dt = el.getAttribute('datetime');
+  if (!dt) return;
+  var d = new Date(dt);
+  if (isNaN(d)) return;
+  var now = new Date();
+  var diff = (now - d) / 1000;
+  if (diff < 3600) el.textContent = Math.round(diff/60) + ' min ago';
+  else if (diff < 86400) el.textContent = Math.round(diff/3600) + ' hr ago';
+  else if (diff < 604800) el.textContent = Math.round(diff/86400) + ' days ago';
+  else el.textContent = d.toLocaleDateString();
+});
+
+// ---- Feed/Seed rows ----
+function addFeedRow(source, url) {
+  var div = document.createElement('div');
+  div.className = 'feed-row';
+  div.innerHTML = '<input type="text" class="feed-source" placeholder="source" value="' + (source||'') + '"><input type="url" class="feed-url" placeholder="Feed URL" value="' + (url||'') + '"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button>';
+  document.getElementById('feeds-list').appendChild(div);
+}
+function addSeedRow(url) {
+  var div = document.createElement('div');
+  div.className = 'seed-row';
+  div.innerHTML = '<input type="url" class="seed-url" placeholder="Seed URL" value="' + (url||'') + '"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">&times;</button>';
+  document.getElementById('seeds-list').appendChild(div);
+}
+var DEFAULT_FEEDS = {
+  'bbc': 'http://feeds.bbci.co.uk/news/rss.xml',
+  'aljazeera': 'https://www.aljazeera.com/xml/rss/all.xml',
+  'npr': 'https://feeds.npr.org/1001/rss.xml',
+  'guardian': 'https://www.theguardian.com/world/rss'
+};
+var SETTINGS_KEY = 'figtree-news-crawl-settings';
+var SETTING_IDS = ['max-articles', 'max-stories', 'since', 'before', 'compute-kv', 'interval', 'llm-enabled', 'searxng-enabled', 'searxng-time-range', 'searxng-categories', 'searxng-queries'];
+function saveSettings() {
+  var settings = {};
+  SETTING_IDS.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    settings[id] = el.type === 'checkbox' ? el.checked : el.value;
+  });
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+function loadSettings() {
+  try {
+    var raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return;
+    var settings = JSON.parse(raw);
+    SETTING_IDS.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (!el || !(id in settings)) return;
+      if (el.type === 'checkbox') el.checked = settings[id];
+      else el.value = settings[id];
+    });
+  } catch(e) {}
+}
+loadSettings();
+SETTING_IDS.forEach(function(id) {
+  var el = document.getElementById(id);
+  if (el) el.addEventListener('change', saveSettings);
+});
+fetch('/api/config').then(function(r) { return r.json(); }).then(function(cfg) {
+  if (cfg.feeds && Object.keys(cfg.feeds).length) {
+    document.getElementById('feeds-list').innerHTML = '';
+    Object.entries(cfg.feeds).forEach(function(entry) { addFeedRow(entry[0], entry[1]); });
+  } else {
+    Object.entries(DEFAULT_FEEDS).forEach(function(entry) { addFeedRow(entry[0], entry[1]); });
+  }
+  if (cfg.seeds) cfg.seeds.forEach(function(url) { addSeedRow(url); });
+  if (cfg.searxng) {
+    var s = cfg.searxng;
+    document.getElementById('searxng-enabled').checked = s.enabled !== false;
+    document.getElementById('searxng-time-range').value = s.time_range || 'last_week';
+    document.getElementById('searxng-categories').value = s.categories || 'news';
+    document.getElementById('searxng-queries').value = (s.queries || []).join('\n');
+  }
+}).catch(function() {});
+
+// ---- Crawl control ----
+var WS_URL = 'ws://' + location.host + '/ws';
+var ws = null;
+var crawlRunning = false;
+var _autoRefreshEnabled = true;
+var _lastArticleCount = 0;
+var _contentRefreshTimer = null;
+
+function connectWS() {
+  ws = new WebSocket(WS_URL);
+  ws.onmessage = function(e) {
+    var msg = JSON.parse(e.data);
+    if (msg.type === 'crawl_status') updateCrawlUI(msg.data);
+    if (msg.type === 'content_update') refreshContent();
+  };
+  ws.onclose = function() { setTimeout(connectWS, 2000); };
+  ws.onerror = function() { ws.close(); };
+}
+connectWS();
+
+function refreshContent() {
+  if (_contentRefreshTimer) clearTimeout(_contentRefreshTimer);
+  _contentRefreshTimer = setTimeout(function() {
+    fetch('/api/stats').then(function(r) { return r.json(); }).then(function(s) {
+      var newCount = s.articles || 0;
+      if (newCount > _lastArticleCount) {
+        if (_autoRefreshEnabled) { location.reload(); }
+        else {
+          var banner = document.getElementById('new-articles-banner');
+          if (banner) { banner.querySelector('span').textContent = (newCount - _lastArticleCount) + ' new articles'; banner.style.display = 'flex'; }
+        }
+      }
+      _lastArticleCount = newCount;
+      updateStats();
+    }).catch(function() {});
+  }, 2000);
+}
+
+function updateCrawlUI(state) {
+  crawlRunning = state.running || state.continuous;
+  var b1 = document.getElementById('btn-crawl-once');
+  var b2 = document.getElementById('btn-crawl-continuous');
+  var b3 = document.getElementById('btn-crawl-stop');
+  if (b1) b1.disabled = crawlRunning;
+  if (b2) b2.disabled = crawlRunning;
+  if (b3) b3.disabled = !crawlRunning;
+  var cs = document.getElementById('crawl-status');
+  if (cs) {
+    var step = state.current_step || '';
+    cs.textContent = step === 'error' ? 'Error' : step === 'done' ? 'Done' : step === 'sleeping' ? 'Sleeping' : step === 'next_tick' ? 'Next tick...' : crawlRunning ? step : 'Idle';
+    cs.style.color = step === 'error' ? '#FF6B6B' : crawlRunning ? '#A6F0FF' : '';
+    if (state.mode && !crawlRunning) { cs.textContent = state.mode; cs.style.color = state.mode === 'backward' ? '#FFC107' : '#0BD6AB'; }
+  }
+  var isDone = state.current_step === 'done';
+  var isError = state.current_step === 'error';
+  var showPanel = state.running || state.current_step === 'sleeping' || state.current_step === 'next_tick' || isError || (!isDone && state.current_step !== 'idle');
+  var panel = document.getElementById('progress-panel');
+  if (panel) panel.style.display = showPanel ? 'block' : 'none';
+  var se = document.getElementById('progress-step');
+  if (se) { se.textContent = state.current_step || ''; se.style.color = isError ? '#FF6B6B' : ''; }
+  var me = document.getElementById('progress-message');
+  if (me) me.textContent = state.message || '';
+  if (state.stats && Object.keys(state.stats).length) {
+    var le = document.getElementById('progress-log');
+    if (le) le.innerHTML = JSON.stringify(state.stats, null, 2);
+  }
+  if (isError) {
+    var le = document.getElementById('progress-log');
+    if (le) le.innerHTML = '<span style="color:#FF6B6B">' + (state.message || 'Unknown error') + '</span>';
+  }
+  if (isDone && !state.continuous && panel) { setTimeout(function() { panel.style.display = 'none'; }, 5000); }
+}
+
+async function runCrawl(continuous) {
+  var feeds = {};
+  document.querySelectorAll('#feeds-list .feed-row').forEach(function(row) {
+    var s = row.querySelector('.feed-source').value.trim();
+    var u = row.querySelector('.feed-url').value.trim();
+    if (s && u) feeds[s] = u;
+  });
+  var seeds = [];
+  document.querySelectorAll('#seeds-list .seed-row').forEach(function(row) {
+    var u = row.querySelector('.seed-url').value.trim();
+    if (u) seeds.push(u);
+  });
+  var body = {
+    feeds: feeds, seeds: seeds,
+    max_articles: parseInt(document.getElementById('max-articles').value) || 40,
+    max_stories: parseInt(document.getElementById('max-stories').value) || 0,
+    since: document.getElementById('since') ? document.getElementById('since').value || '' : '',
+    before: document.getElementById('before') ? document.getElementById('before').value || '' : '',
+    summarize: document.getElementById('summarize') ? document.getElementById('summarize').checked : true,
+    continuous: continuous,
+    interval: parseInt(document.getElementById('interval').value) || 0,
+    llm_enabled: document.getElementById('llm-enabled') ? document.getElementById('llm-enabled').checked : false,
+    searxng_enabled: document.getElementById('searxng-enabled') ? document.getElementById('searxng-enabled').checked : true,
+    searxng_time_range: document.getElementById('searxng-time-range') ? document.getElementById('searxng-time-range').value : 'last_week',
+    searxng_categories: document.getElementById('searxng-categories') ? document.getElementById('searxng-categories').value : 'news',
+    searxng_queries: document.getElementById('searxng-queries') ? document.getElementById('searxng-queries').value : '',
+    smart_crawl: document.getElementById('smart-crawl') ? document.getElementById('smart-crawl').checked : true,
+  };
+  try {
+    var resp = await fetch('/api/crawl/run', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+    var data = await resp.json();
+    if (data.error) alert(data.error);
+    else if (continuous) { var p = document.getElementById('progress-panel'); if (p) p.style.display = 'block'; }
+  } catch(e) { alert('Failed: ' + e.message); }
+}
+
+async function stopCrawl() {
+  try { await fetch('/api/crawl/stop', {method: 'POST'}); } catch(e) {}
+}
+
+async function runPipeline() {
+  try {
+    var resp = await fetch('/api/pipeline/run', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({summarize: true, brief: true}) });
+    var data = await resp.json();
+    alert('Pipeline: ' + JSON.stringify(data));
+    location.reload();
+  } catch(e) { alert('Failed: ' + e.message); }
+}
+
+function updateStats() {
+  fetch('/api/stats').then(function(r) { return r.json(); }).then(function(s) {
+    var e;
+    e = document.getElementById('stat-articles'); if (e) e.textContent = s.articles || 0;
+    e = document.getElementById('stat-narratives'); if (e) e.textContent = s.narratives || 0;
+    e = document.getElementById('stat-sources'); if (e) e.textContent = s.sources || 0;
+    e = document.getElementById('stat-brief'); if (e) e.textContent = s.has_brief ? 'Yes' : 'No';
+  }).catch(function() {});
+}
+updateStats(); setInterval(updateStats, 30000);
+fetch('/api/stats').then(function(r) { return r.json(); }).then(function(s) { _lastArticleCount = s.articles || 0; }).catch(function() {});
+</script>
 {% endblock %}
