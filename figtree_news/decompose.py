@@ -60,12 +60,15 @@ class DecompositionEngine:
                 self._workers.append(worker)
             print(f"[decompose] Started {self.num_workers} background workers")
             
-            # Queue existing articles that need decomposition
+            # Queue existing articles as a background task (don't await - run in background)
             asyncio.create_task(self._queue_existing_articles())
     
     async def _queue_existing_articles(self):
-        """Find and queue existing articles that haven't been decomposed."""
+        """Find and queue existing articles that haven't been decomposed. Run as background task."""
         try:
+            # Small delay to let the server fully start first
+            await asyncio.sleep(2)
+            
             all_figs = self.store.all()
             articles = [f for f in all_figs if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()]
             
@@ -73,9 +76,15 @@ class DecompositionEngine:
             
             if needs_decomp:
                 print(f"[decompose] Found {len(needs_decomp)} existing articles needing decomposition")
-                for article in needs_decomp:
-                    await self.queue_article(article.figment_id)
-                print(f"[decompose] Queued {len(needs_decomp)} existing articles")
+                # Queue in batches to avoid blocking event loop
+                batch_size = 50
+                for i in range(0, len(needs_decomp), batch_size):
+                    batch = needs_decomp[i:i + batch_size]
+                    for article in batch:
+                        await self.queue_article(article.figment_id)
+                    # Small yield between batches
+                    await asyncio.sleep(0.1)
+                print(f"[decompose] Queued {len(needs_decomp)} existing articles for background processing")
             else:
                 print(f"[decompose] All existing articles already decomposed")
         except Exception as exc:
@@ -112,9 +121,11 @@ class DecompositionEngine:
                 article_id = await self.queue.get()
                 print(f"[decompose-{worker_id}] Picked up article {article_id[:8]}, queue={self.queue.qsize()}")
                 
-                # Process immediately - no artificial delays
                 await self._decompose_article(article_id, client)
                 processed_count += 1
+                
+                # Small yield to not monopolize event loop
+                await asyncio.sleep(0.01)
                 
                 # Log progress every 10 articles
                 if processed_count % 10 == 0:
