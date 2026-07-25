@@ -2,13 +2,32 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 from figtree import Figment, FigmentStore, connect
 
 from figtree_news import lineage as lineage_mod
 
 
-def _article(source_id, text, published, url, fid):
+def _role_figment(role: str, text: str, article_id: str) -> Figment:
+    normalized = text.lower().strip()
+    fid = hashlib.sha256(f"role:{role}:{normalized}".encode()).hexdigest()[:16]
+    return Figment.create(
+        text=text,
+        boundary=np.zeros(8, dtype="float32"),
+        meta={
+            "role": role,
+            "article_id": article_id,
+            "normalized": normalized,
+            "references": [],
+            "reference_count": 0,
+        },
+        figment_id=fid,
+    )
+
+
+def _article(source_id, text, published, url, fid, role_figment_ids=None):
     return Figment.create(
         text=text,
         boundary=np.zeros(8, dtype="float32"),
@@ -18,6 +37,8 @@ def _article(source_id, text, published, url, fid):
             "url": url,
             "published": published,
             "first_seen": published,
+            "decomposed": True,
+            "role_figments": role_figment_ids or [],
         },
         figment_id=fid,
         trust=0.8,
@@ -26,9 +47,28 @@ def _article(source_id, text, published, url, fid):
 
 def _seed_store(tmp_path):
     store: FigmentStore = connect(str(tmp_path / "news.lance"))
-    a = _article("reuters", "The Election was held on Tuesday.", "Mon, 01 Jan 2024 10:00:00 GMT", "http://reuters.com/1", "a1")
-    b = _article("blog", "The Election results were announced Wednesday.", "Tue, 02 Jan 2024 10:00:00 GMT", "http://blog.com/1", "b1")
-    store.upsert([a, b], hidden_size=8)
+
+    who_election = _role_figment("who", "Election Commission", "a1")
+    what_election = _role_figment("what", "Election held", "a1")
+    when_election = _role_figment("when", "Tuesday", "a1")
+
+    a = _article(
+        "reuters", "The Election was held on Tuesday.",
+        "Mon, 01 Jan 2024 10:00:00 GMT", "http://reuters.com/1", "a1",
+        role_figment_ids=[who_election.figment_id, what_election.figment_id, when_election.figment_id],
+    )
+
+    who_election_b = _role_figment("who", "Election Commission", "b1")
+    what_election_b = _role_figment("what", "Election held", "b1")
+    when_election_b = _role_figment("when", "Wednesday", "b1")
+
+    b = _article(
+        "blog", "The Election results were announced Wednesday.",
+        "Tue, 02 Jan 2024 10:00:00 GMT", "http://blog.com/1", "b1",
+        role_figment_ids=[who_election_b.figment_id, what_election_b.figment_id, when_election_b.figment_id],
+    )
+
+    store.upsert([a, b, who_election, what_election, when_election, who_election_b, what_election_b, when_election_b], hidden_size=8)
     return store
 
 
@@ -44,7 +84,6 @@ def test_first_reporter_and_derivative(tmp_path):
     assert len(derivs) == 1
     assert derivs[0]["derivative_url"] == "http://blog.com/1"
 
-    # The blog article should be marked derivative_of the reuters article.
     figs = {f.figment_id: f for f in store.all()}
     assert figs["b1"].meta.get("derivative_of") == "a1"
     assert figs["a1"].meta.get("first_reporter") is True
@@ -54,5 +93,5 @@ def test_lineage_idempotent(tmp_path):
     store = _seed_store(tmp_path)
     lineage_mod.compute_lineage(store)
     before = len(store.all())
-    lineage_mod.compute_lineage(store)  # re-run
-    assert len(store.all()) == before  # no duplicate figments created
+    lineage_mod.compute_lineage(store)
+    assert len(store.all()) == before

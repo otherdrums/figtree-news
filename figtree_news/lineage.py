@@ -1,105 +1,37 @@
-"""Lineage: who broke it first, who is derivative, and narrative/agenda maps.
+"""Lineage: narrative clustering via role figments, who broke it first, derivatives.
 
-Pure CPU analysis over stored figments — no model required. Runs after
-ingestion (e.g. at the end of each crawler tick) and persists its findings as
-figments so the web UI can query them directly:
+Clustering uses role figments (WHO/WHAT/WHERE/WHEN/WHY/HOW) extracted by the
+external LLM decomposition engine. Two articles share a narrative if they share
+>= 2 role figments (exact semantic match via normalized text deduplication).
 
-* ``narrative:{key}``  — one figment per cluster of articles about the same
-  entities (the "story"). Carries the member article ids, the sources, the
-  first reporter, and the stance lean.
-* ``derivative:{orig}:{der}`` — an edge figment marking ``der`` as published
-  later than ``orig`` while covering the same story (an echo / derivative).
+Falls back to boundary similarity when the external LLM is not configured and
+no role figments exist.
 
-Deterministic ids make the whole step idempotent: re-running overwrites the
-previous lineage rather than duplicating it.
+Persists findings as figments so the web UI can query them directly:
+* ``narrative:{key}`` — one figment per cluster of articles about the same story.
+* ``derivative:{orig}:{der}`` — edge marking ``der`` as echoing ``orig``.
+
+Deterministic ids make the whole step idempotent.
 """
 
 from __future__ import annotations
 
 import hashlib
-import re
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 
+import numpy as np
+
 from figtree import Figment, FigmentStore, Figtree
-
-_ENTITY_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*|[A-Z]{2,})\b")
-_STOP = {
-    # Articles / determiners / pronouns
-    "The", "This", "That", "These", "Those", "We", "They", "He", "She", "It",
-    # Days / months (low-signal for clustering)
-    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
-    "January", "February", "March", "April", "May", "June", "July", "August",
-    "September", "October", "November", "December",
-    # Source names (not entities)
-    "Reuters", "AP", "BBC", "Guardian", "NPR", "Aljazeera", "CNN", "NYT",
-    "New", "York", "Times",
-    # Generic news verbs / roles (not unique entities)
-    "President", "Prime", "Minister", "Government", "Official",
-    "World", "News", "Report", "Story", "Article", "People", "Some", "Amid",
-    "After", "Before", "During", "Following", "Because", "Despite",
-    "About", "Over", "Under", "Between", "Against", "Through", "Into",
-    "According", "Said", "Says", "Told", "Old", "First", "Last",
-    "More", "Most", "Many", "Much", "Several", "One", "Two", "Three",
-    "Watch", "Video", "Live", "Updated", "Breaking",
-    # Generic directions
-    "South", "North", "East", "West",
-    # Common verbs/adjectives that get capitalized in headlines
-    "Hits", "Slams", "Blasts", "Hails", "Urges", "Calls", "Makes",
-    "Gets", "Set", "May", "Could", "Would", "Should", "Will",
-    "Reportedly", "Allegedly",
-    # Question words / sentence starters that get extracted as entities
-    "Who", "What", "Where", "When", "Why", "How", "Which",
-}
-
-
-def _entities(text: str) -> set[str]:
-    if not text:
-        return set()
-    # More permissive: capture any capitalized word sequence, including hyphenated
-    toks = {t.strip(".") for t in re.findall(r"\b([A-Z][a-z]+(?:[\s-][A-Z][a-z]+)*)\b", text)}
-    result = set()
-    for t in toks:
-        if len(t) < 3:
-            continue
-        # Only filter single-word entities against stop list
-        if " " not in t and "-" not in t and t in _STOP:
-            continue
-        result.add(t)
-        # For multi-word entities, also add individual words as entities
-        # This helps match "Saudi Arabia" with "Saudi" across different headlines
-        if " " in t:
-            for word in t.split():
-                if len(word) >= 3 and word not in _STOP:
-                    result.add(word)
-        if "-" in t:
-            for word in t.split("-"):
-                if len(word) >= 3 and word not in _STOP:
-                    result.add(word)
-    return result
 
 
 def _normalize_source(source_id: str) -> str:
     """Collapse same-org feed variants (e.g. france24 + france24_yt -> france24)."""
-    # Strip _yt/_rss/_tw suffixes that mark different feed types from the same org
     for suffix in ("_yt", "_rss", "_tw", "_fb"):
         if source_id.endswith(suffix):
             return source_id[: -len(suffix)]
     return source_id
-
-
-def _article_entities(art: Figment) -> set[str]:
-    """Extract entities from title, falling back to text.
-    
-    Prefer title because it's more specific per-article. Body text tends
-    to contain generic entities (country names, common figures) that cause
-    over-clustering.
-    """
-    title = art.meta.get("title", "")
-    if title:
-        return _entities(title)
-    return _entities(art.text)
 
 
 def _parse_time(fig: Figment) -> datetime | None:
@@ -127,17 +59,22 @@ def _articles(store: FigmentStore, *, all_figs: list | None = None) -> list[Figm
     ]
 
 
-def _cluster(articles: list[Figment], min_shared: int = 2, min_jaccard: float = 0.25) -> list[list[Figment]]:
-    """Group articles by entity overlap using inverted index.
-    
-    Uses a combined check: articles must share >= min_shared entities AND
-    have >= min_jaccard Jaccard similarity. Higher thresholds prevent
-    over-merging distinct stories that share common entities (e.g., "Trump", "Biden").
-    
-    Uses an inverted index for O(n * avg_entities) instead of O(n²).
+def _cluster_by_roles(articles: list[Figment], min_shared: int = 2) -> list[list[Figment]]:
+    """Cluster articles by shared role figments.
+
+    Two articles share a narrative if they share >= min_shared role figment IDs.
+    Role figments are deduplicated by hash(role + normalized_text), so sharing
+    a role figment ID means semantic identity.
+
+    Articles without role figments (not yet decomposed) are left as singletons.
     """
     by_id = {f.figment_id: f for f in articles}
-    ent_sets = {f.figment_id: _article_entities(f) for f in articles}
+    article_roles: dict[str, set[str]] = {}
+
+    for f in articles:
+        role_ids = set(f.meta.get("role_figments", []))
+        article_roles[f.figment_id] = role_ids
+
     parent = {f.figment_id: f.figment_id for f in articles}
 
     def find(x):
@@ -151,34 +88,21 @@ def _cluster(articles: list[Figment], min_shared: int = 2, min_jaccard: float = 
         if ra != rb:
             parent[rb] = ra
 
-    def jaccard(a, b):
-        sa, sb = ent_sets[a], ent_sets[b]
-        inter = len(sa & sb)
-        union_len = len(sa | sb)
-        return inter / union_len if union_len else 0.0
+    role_to_articles: dict[str, list[str]] = {}
+    for aid, roles in article_roles.items():
+        for rid in roles:
+            role_to_articles.setdefault(rid, []).append(aid)
 
-    # Build inverted index: entity -> set of article IDs
-    inv_index: dict[str, set[str]] = {}
-    for fid, ents in ent_sets.items():
-        for ent in ents:
-            inv_index.setdefault(ent, set()).add(fid)
-
-    # For each article, find candidates via shared entities, then check both
-    checked: set[tuple[str, str]] = set()
-    for fid, ents in ent_sets.items():
-        candidates: set[str] = set()
-        for ent in ents:
-            candidates |= inv_index.get(ent, set())
-        candidates.discard(fid)
-        
-        for cand in candidates:
-            pair = tuple(sorted([fid, cand]))
-            if pair in checked:
-                continue
-            checked.add(pair)
-            shared = len(ent_sets[fid] & ent_sets[cand])
-            if shared >= min_shared and jaccard(fid, cand) >= min_jaccard:
-                union(fid, cand)
+    for rid, aids in role_to_articles.items():
+        aids_unique = list(set(aids))
+        for i in range(len(aids_unique)):
+            for j in range(i + 1, len(aids_unique)):
+                a, b = aids_unique[i], aids_unique[j]
+                if find(a) == find(b):
+                    continue
+                shared = article_roles[a] & article_roles[b]
+                if len(shared) >= min_shared:
+                    union(a, b)
 
     groups: dict[str, list[Figment]] = {}
     for fid in parent:
@@ -186,36 +110,106 @@ def _cluster(articles: list[Figment], min_shared: int = 2, min_jaccard: float = 
     return list(groups.values())
 
 
+def _cluster_by_boundary(articles: list[Figment], threshold: float = 0.95, hours: int = 48) -> list[list[Figment]]:
+    """Fallback: cluster by boundary cosine similarity within time window.
+
+    Used only when no role figments exist (external LLM not configured).
+    Threshold is tunable — start conservative (0.95) and adjust based on results.
+    """
+    by_id = {f.figment_id: f for f in articles}
+    times = {f.figment_id: _parse_time(f) for f in articles}
+    parent = {f.figment_id: f.figment_id for f in articles}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    def _hours_apart(a: str, b: str) -> float | None:
+        ta, tb = times.get(a), times.get(b)
+        if ta is None or tb is None:
+            return None
+        return abs((ta - tb).total_seconds()) / 3600.0
+
+    def _boundary_cos(a: str, b: str) -> float:
+        ba = by_id[a].boundary.astype(np.float64)
+        bb = by_id[b].boundary.astype(np.float64)
+        return float(np.dot(ba, bb) / (np.linalg.norm(ba) * np.linalg.norm(bb) + 1e-10))
+
+    fids = list(by_id.keys())
+    for i in range(len(fids)):
+        for j in range(i + 1, len(fids)):
+            a, b = fids[i], fids[j]
+            if find(a) == find(b):
+                continue
+            h = _hours_apart(a, b)
+            if h is not None and h <= hours:
+                cos = _boundary_cos(a, b)
+                if cos >= threshold:
+                    union(a, b)
+
+    groups: dict[str, list[Figment]] = {}
+    for fid in parent:
+        groups.setdefault(find(fid), []).append(by_id[fid])
+    return list(groups.values())
+
+
+def _has_role_figments(articles: list[Figment]) -> bool:
+    """Check if any articles have role figments (decomposition completed)."""
+    return any(f.meta.get("role_figments") for f in articles)
+
+
+def _extract_role_entities(articles: list[Figment], all_figs: list[Figment]) -> list[str]:
+    """Extract entity names from role figments for narrative metadata."""
+    by_id = {f.figment_id: f for f in all_figs}
+    entities: set[str] = set()
+    for art in articles:
+        for rid in art.meta.get("role_figments", []):
+            role_fig = by_id.get(rid)
+            if role_fig:
+                text = role_fig.meta.get("normalized") or role_fig.text
+                if text and len(text) >= 3:
+                    entities.add(text)
+    return sorted(entities)[:12]
+
 
 def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]:
     """Recompute lineage figments from the current store. Idempotent.
-    
-    Uses entity-based clustering (fast inverted index) as primary.
-    Boundary search only used within clusters for frame shift detection.
-    
-    max_stories: if > 0, keep only the top N narratives by member count.
+
+    Uses role figment clustering when available, boundary fallback otherwise.
     """
     all_figs = store.all()
-    # Purge old narrative/derivative figments so stale clusters don't linger.
     for f in all_figs:
         if f.meta.get("edge_type") in ("narrative", "derivative"):
             store.delete(f.figment_id)
 
     articles = _articles(store, all_figs=all_figs)
-    
-    # Entity-based clustering (fast: inverted index, O(n * avg_entities))
+
+    has_roles = _has_role_figments(articles)
     print(f"\n[lineage] Clustering {len(articles)} articles...")
-    entity_clusters = _cluster(articles)
-    print(f"[lineage]   Entity-based: {len(entity_clusters)} clusters")
-    
-    # Use entity clustering as primary
-    clusters = entity_clusters
-    
+
+    if has_roles:
+        print("[lineage]   Using role figment clustering")
+        clusters = _cluster_by_roles(articles)
+    else:
+        print("[lineage]   No role figments — using boundary similarity fallback")
+        clusters = _cluster_by_boundary(articles)
+
+    print(f"[lineage]   {len(clusters)} clusters")
+
     figments: list[Figment] = []
     summaries: list[dict[str, Any]] = []
 
-    # Sort by latest article date so stories with newest coverage float to top
-    clusters.sort(key=lambda g: max((_parse_time(f) or datetime.max.replace(tzinfo=timezone.utc)) for f in g), reverse=True)
+    clusters.sort(
+        key=lambda g: max((_parse_time(f) or datetime.max.replace(tzinfo=timezone.utc)) for f in g),
+        reverse=True,
+    )
     if max_stories > 0:
         clusters = clusters[:max_stories]
 
@@ -228,7 +222,6 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
         key = hashlib.sha1("|".join(members).encode()).hexdigest()[:12]
         narrative_id = f"narrative:{key}"
 
-        # Mark first reporter + derivatives on the article figments themselves.
         updated_articles: list[Figment] = []
         for f in group:
             if f.figment_id == first.figment_id:
@@ -255,37 +248,30 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
                 )
             updated_articles.append(f)
 
-        # Use first reporter's headline as the narrative title; fall back to first sentence.
         narrative_title = first.meta.get("title") or first.text.split(".")[0].strip()
-        narrative_text = narrative_title
 
-        # Detect frame shift: compare newest article's boundary to first reporter's
         newest = group[-1]
         frame_shift = False
         frame_shift_score = None
         if len(group) >= 2 and newest.figment_id != first.figment_id:
-            import numpy as np
             a = first.boundary.astype(np.float64)
             b = newest.boundary.astype(np.float64)
             cos_sim = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
             frame_shift = cos_sim < 0.85
             frame_shift_score = cos_sim
 
-        # Find the latest article date in this narrative
         latest_time = max((ft[1] for ft in times if ft[1]), default=None)
         latest_iso = latest_time.isoformat() if latest_time else ""
-        
-        # Count articles from last 24 hours for "new" indicator
+
         now_utc = datetime.now(timezone.utc)
         day_ago = now_utc - timedelta(days=1)
         new_count = sum(1 for ft in times if ft[1] and ft[1] >= day_ago)
-        
-        # first_seen is when this narrative was first created (now, since we recompute each pipeline run)
-        # In a persistent system, this would be the original creation time
         first_seen_iso = now_utc.isoformat()
 
+        entities = _extract_role_entities(group, all_figs) if has_roles else []
+
         narrative = Figment.create(
-            text=narrative_text,
+            text=narrative_title,
             boundary=first.boundary.copy(),
             meta={
                 "edge_type": "narrative",
@@ -295,7 +281,7 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
                 "first_reporter": first.figment_id,
                 "first_reporter_source": first.meta.get("source_id"),
                 "first_reporter_url": first.meta.get("url"),
-                "entities": sorted(set().union(*[_article_entities(f) for f in group]))[:12],
+                "entities": entities,
                 "frame_shift": frame_shift,
                 "frame_shift_score": frame_shift_score,
                 "frame_shift_note": (
@@ -326,7 +312,6 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
             }
         )
 
-        # Persist article meta updates (first_reporter / derivative_of).
         hidden = group[0].boundary.shape[0]
         store.upsert(updated_articles, hidden_size=hidden)
 
@@ -335,7 +320,7 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
         store.upsert(figments, hidden_size=hidden)
 
     return {
-        "narratives": summaries, 
+        "narratives": summaries,
         "edges": len(figments) - len(summaries),
     }
 
@@ -413,12 +398,7 @@ def source_agenda(store: FigmentStore, *, all_figs: list | None = None) -> dict[
 
 
 def assign_roles_to_narratives(store: FigmentStore, *, all_figs: list | None = None) -> int:
-    """Link role figments to their parent narrative via story_id meta key.
-
-    After lineage recomputes narratives, this walks all role figments and
-    stamps each one with the narrative_id of the story whose member articles
-    reference the same parent article. Idempotent — only writes when changed.
-    """
+    """Link role figments to their parent narrative via story_id meta key."""
     figs = all_figs if all_figs is not None else store.all()
     narrs = get_narratives(store, all_figs=figs)
     updated = 0

@@ -1,4 +1,4 @@
-"""Cogitation engine: background consolidation and link discovery.
+"""Cogitation engine: background consolidation and insight generation.
 
 Periodically reviews figments to:
 1. Find and merge duplicate figments (semantic deduplication)
@@ -45,7 +45,7 @@ class CogitationEngine:
         self._running = False
         if self._task:
             self._task.cancel()
-            print(f"[cogitate] Background worker stopped")
+            print("[cogitate] Background worker stopped")
     
     async def _consolidation_loop(self):
         """Run consolidation periodically."""
@@ -62,32 +62,26 @@ class CogitationEngine:
     
     async def consolidate(self):
         """Main consolidation routine."""
-        print(f"\n[cogitate] Starting consolidation phase...")
+        print("\n[cogitate] Starting consolidation phase...")
         
-        # Run heavy CPU work in thread pool to not block event loop
         loop = asyncio.get_event_loop()
         
-        # Step 1: Find and merge duplicate figments
         merged = await loop.run_in_executor(None, self._merge_duplicates_sync)
         print(f"[cogitate]   Merged {merged} duplicate figments")
         
-        # Step 2: Discover new relationships
         relationships = await loop.run_in_executor(None, self._discover_links_sync)
         print(f"[cogitate]   Discovered {relationships} new relationships")
         
-        # Step 3: Strengthen co-occurrence patterns
         strengthened = await loop.run_in_executor(None, self._strengthen_patterns_sync)
         print(f"[cogitate]   Strengthened {strengthened} patterns")
         
-        # Step 4: Prune unused figments
         pruned = await loop.run_in_executor(None, self._prune_weak_links_sync)
         print(f"[cogitate]   Pruned {pruned} weak links")
         
-        # Step 5: Generate insights (uses LLM, keep async)
         insights = await self.generate_insights()
         print(f"[cogitate]   Generated {insights} insights")
         
-        print(f"[cogitate] Consolidation complete\n")
+        print("[cogitate] Consolidation complete\n")
 
     def _merge_duplicates_sync(self) -> int:
         """Synchronous version of merge_duplicates for thread pool."""
@@ -108,7 +102,6 @@ class CogitationEngine:
                 if len(cluster) > 1:
                     canonical = cluster[0]
                     for duplicate in cluster[1:]:
-                        # Run async merge in event loop
                         try:
                             asyncio.run_coroutine_threadsafe(
                                 self._merge_figments(canonical, duplicate), 
@@ -177,62 +170,6 @@ class CogitationEngine:
                 self.store.delete(fig.figment_id)
                 pruned += 1
         return pruned
-
-    async def consolidate(self):
-        """Main consolidation routine."""
-        print(f"\n[cogitate] Starting consolidation phase...")
-        
-        # Run heavy CPU work in thread pool to not block event loop
-        loop = asyncio.get_event_loop()
-        
-        # Step 1: Find and merge duplicate figments
-        merged = await loop.run_in_executor(None, self._merge_duplicates_sync)
-        print(f"[cogitate]   Merged {merged} duplicate figments")
-        
-        # Step 2: Discover new relationships
-        relationships = await loop.run_in_executor(None, self._discover_links_sync)
-        print(f"[cogitate]   Discovered {relationships} new relationships")
-        
-        # Step 3: Strengthen co-occurrence patterns
-        strengthened = await loop.run_in_executor(None, self._strengthen_patterns_sync)
-        print(f"[cogitate]   Strengthened {strengthened} patterns")
-        
-        # Step 4: Prune unused figments
-        pruned = await loop.run_in_executor(None, self._prune_weak_links_sync)
-        print(f"[cogitate]   Pruned {pruned} weak links")
-        
-        # Step 5: Generate insights (uses LLM, keep async)
-        insights = await self.generate_insights()
-        print(f"[cogitate]   Generated {insights} insights")
-        
-        print(f"[cogitate] Consolidation complete\n")
-    
-    async def merge_duplicates(self) -> int:
-        """Find figments with similar boundaries and merge them."""
-        all_figments = self.store.all()
-        role_groups = {}
-        
-        # Group figments by role
-        for fig in all_figments:
-            role = fig.meta.get('role')
-            if role:
-                role_groups.setdefault(role, []).append(fig)
-        
-        merged_count = 0
-        
-        for role, figments in role_groups.items():
-            # Find clusters of similar figments
-            clusters = self._cluster_by_boundary(figments, threshold=0.95)
-            
-            for cluster in clusters:
-                if len(cluster) > 1:
-                    # Merge cluster into canonical figment (first one)
-                    canonical = cluster[0]
-                    for duplicate in cluster[1:]:
-                        await self._merge_figments(canonical, duplicate)
-                        merged_count += 1
-        
-        return merged_count
     
     def _cluster_by_boundary(self, figments: list[Figment], threshold: float) -> list[list[Figment]]:
         """Cluster figments by boundary similarity using union-find."""
@@ -252,14 +189,12 @@ class CogitationEngine:
             if ra != rb:
                 parent[rb] = ra
         
-        # Compare all pairs
         for i in range(len(figments)):
             for j in range(i + 1, len(figments)):
                 sim = self._boundary_similarity(figments[i].boundary, figments[j].boundary)
                 if sim >= threshold:
                     union(figments[i].figment_id, figments[j].figment_id)
         
-        # Group by root
         clusters = {}
         for fig in figments:
             root = find(fig.figment_id)
@@ -275,19 +210,15 @@ class CogitationEngine:
     
     async def _merge_figments(self, canonical: Figment, duplicate: Figment):
         """Merge duplicate figment into canonical."""
-        # Combine references
         refs = canonical.meta.get('references', [])
         dup_refs = duplicate.meta.get('references', [])
         combined_refs = list(set(refs + dup_refs))
         
-        # Update canonical
         canonical.meta['references'] = combined_refs
         canonical.meta['reference_count'] = len(combined_refs)
         canonical.meta['merged_from'] = canonical.meta.get('merged_from', []) + [duplicate.figment_id]
         
-        # Update all articles that reference the duplicate
         for ref in dup_refs:
-            # Find parent sentence and update its children
             sentence = self.store.get(ref)
             if sentence:
                 children = sentence.children
@@ -298,7 +229,6 @@ class CogitationEngine:
                     sentence.children = children
                     self.store.upsert([sentence], hidden_size=sentence.boundary.shape[0])
             
-            # Find parent article and update role_figments
             article = self.store.get(ref)
             if article and article.meta.get('role_figments'):
                 role_figs = article.meta['role_figments']
@@ -309,86 +239,10 @@ class CogitationEngine:
                     article.meta['role_figments'] = role_figs
                     self.store.upsert([article], hidden_size=article.boundary.shape[0])
         
-        # Upsert canonical
         self.store.upsert([canonical], hidden_size=canonical.boundary.shape[0])
-        
-        # Delete duplicate
         self.store.delete(duplicate.figment_id)
         
         print(f"[cogitate]   Merged {duplicate.figment_id[:8]} into {canonical.figment_id[:8]}")
-    
-    async def discover_links(self) -> int:
-        """Find figments that co-occur and create relationships."""
-        cooccurrence = {}
-        
-        for article in self.store.all():
-            if not article.meta.get('is_image'):
-                continue
-            
-            role_figment_ids = article.meta.get('role_figments', [])
-            if len(role_figment_ids) < 2:
-                continue
-            
-            # For each pair of figments in this article
-            for i, fig1_id in enumerate(role_figment_ids):
-                for fig2_id in role_figment_ids[i+1:]:
-                    pair = tuple(sorted([fig1_id, fig2_id]))
-                    cooccurrence[pair] = cooccurrence.get(pair, 0) + 1
-        
-        # Create relationships for frequent co-occurrences
-        relationship_count = 0
-        for (fig1_id, fig2_id), count in cooccurrence.items():
-            if count >= 3:  # Threshold for relationship
-                # Check if relationship already exists
-                rel_id = hashlib.sha256(f"rel:{fig1_id}:{fig2_id}".encode()).hexdigest()[:16]
-                existing = self.store.get(rel_id)
-                
-                if existing:
-                    # Strengthen existing relationship
-                    existing.meta['weight'] = existing.meta.get('weight', 1) + count
-                    self.store.upsert([existing], hidden_size=existing.boundary.shape[0])
-                else:
-                    # Create new relationship
-                    fig1 = self.store.get(fig1_id)
-                    if fig1:
-                        rel = Figment.create(
-                            text=f"Relationship: {fig1_id[:8]} <-> {fig2_id[:8]}",
-                            boundary=fig1.boundary.copy(),
-                            meta={
-                                'edge_type': 'relationship',
-                                'figment_a': fig1_id,
-                                'figment_b': fig2_id,
-                                'weight': count
-                            },
-                            figment_id=rel_id
-                        )
-                        self.store.upsert([rel], hidden_size=fig1.boundary.shape[0])
-                        relationship_count += 1
-        
-        return relationship_count
-    
-    async def strengthen_patterns(self) -> int:
-        """Strengthen co-occurrence patterns."""
-        # This is a placeholder for more sophisticated pattern detection
-        # For now, we just count co-occurrences in discover_links
-        return 0
-    
-    async def prune_weak_links(self) -> int:
-        """Remove unused or weak figments."""
-        pruned = 0
-        
-        for fig in self.store.all():
-            if not fig.meta.get('role'):
-                continue
-            
-            ref_count = fig.meta.get('reference_count', 0)
-            
-            # Prune figments with no references
-            if ref_count == 0:
-                self.store.delete(fig.figment_id)
-                pruned += 1
-        
-        return pruned
     
     async def generate_insights(self) -> int:
         """Use LLM to analyze patterns and generate insights."""
@@ -398,7 +252,6 @@ class CogitationEngine:
         from .evaluate import LLMClient
         client = LLMClient(self.llm_config)
         
-        # Get high-level statistics
         all_figments = self.store.all()
         role_figments = [f for f in all_figments if f.meta.get('role')]
         
@@ -408,7 +261,6 @@ class CogitationEngine:
             'cooccurrence_patterns': self._get_top_cooccurrences(limit=5)
         }
         
-        # Ask LLM for insights
         prompt = f"""Analyze these patterns and generate 3-5 insights about the news landscape:
 
 Statistics:
@@ -437,10 +289,8 @@ Respond with ONLY valid JSON:
             if isinstance(insight, dict) and 'text' in insight:
                 insight_id = hashlib.sha256(f"insight:{insight['text'][:50]}".encode()).hexdigest()[:16]
                 
-                # Check if insight already exists
                 existing = self.store.get(insight_id)
                 if not existing:
-                    # Create insight figment
                     if role_figments:
                         boundary = role_figments[0].boundary.copy()
                     else:

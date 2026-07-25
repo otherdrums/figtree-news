@@ -48,7 +48,6 @@
     "kind": "news",
     "logo_url": "https://www.google.com/s2/favicons?domain=france24.com&sz=64"
   },
-
   "foxnews": {
     "name": "Fox News",
     "base_trust": 0.8,
@@ -105,15 +104,6 @@
     "kind": "video",
     "logo_url": "https://www.google.com/s2/favicons?domain=pbs.org&sz=64"
   },
-
-  "llm": {
-    "url": "http://192.168.10.222:8081/v1/chat/completions",
-    "model": "default",
-    "timeout": 120,
-    "enabled": false,
-    "confirmation_threshold": 2
-  },
-
   "feeds": {
     "bbc": "http://feeds.bbci.co.uk/news/rss.xml",
     "aljazeera": "https://www.aljazeera.com/xml/rss/all.xml",
@@ -131,22 +121,42 @@
     "france24_yt": "https://www.youtube.com/feeds/videos.xml?channel_id=UCQfwfsi5VrQ8yKZ-UWmAEFg",
     "pbsnewshour": "https://www.youtube.com/feeds/videos.xml?channel_id=UC6ZFN9Tx6xh-skXCuRHCDpQ"
   },
-  "seeds": [],
   "searxng": {
     "url": "http://192.168.10.202:8081",
     "enabled": true,
-    "queries": [
-      "breaking news today",
-      "technology news",
-      "climate environment news",
-      "economy business markets",
-      "health science research",
-      "politics policy government",
-      "world news today"
-    ],
     "categories": "news",
     "time_range": "day",
+    "language": "en",
     "max_results": 10,
-    "pages": 1
+    "pages": 1,
+    "timeout": 15
+  },
+  "llm": {
+    "url": "http://192.168.10.222:8081/v1",
+    "model": "qwen-3.6",
+    "timeout": 120,
+    "enabled": true,
+    "evaluate_clusters": true,
+    "verify_frame_shifts": true,
+    "review_brief": true,
+    "auto_correct": true,
+    "confirmation_threshold": 2,
+    "find_missed_merges": true,
+    "missed_merge_interval": 10
+  },
+  "crawler": {
+    "continuous": true,
+    "smart_crawl": true,
+    "interval": "300",
+    "max_articles": 15,
+    "max_stories": 0,
+    "llm_enabled": true,
+    "searxng_enabled": true,
+    "searxng_time_range": "day",
+    "searxng_categories": "news",
+    "mode": "forward",
+    "consecutive_empty_ticks": 0,
+    "last_run": null,
+    "backward_time_range": "day"
   }
 }

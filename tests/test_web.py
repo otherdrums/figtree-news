@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 from datetime import timedelta
 from fastapi.testclient import TestClient
@@ -12,21 +14,55 @@ from figtree_news import trust as trust_mod
 from figtree_news.web.serve import create_app
 
 
+def _role_figment(role: str, text: str, article_id: str) -> Figment:
+    normalized = text.lower().strip()
+    fid = hashlib.sha256(f"role:{role}:{normalized}".encode()).hexdigest()[:16]
+    return Figment.create(
+        text=text,
+        boundary=np.zeros(8, dtype="float32"),
+        meta={
+            "role": role,
+            "article_id": article_id,
+            "normalized": normalized,
+            "references": [],
+            "reference_count": 0,
+        },
+        figment_id=fid,
+    )
+
+
 def _seed(tmp_path):
     store: FigmentStore = connect(str(tmp_path / "news.lance"))
+
+    who = _role_figment("who", "Election Commission", "a1")
+    what = _role_figment("what", "Election held", "a1")
+    when = _role_figment("when", "Tuesday", "a1")
+
     a = Figment.create(
         text="The Election was held on Tuesday.", boundary=np.zeros(8, dtype="float32"),
-        meta={"source_id": "reuters", "is_image": True, "url": "http://reuters.com/1",
-              "published": "Mon, 01 Jan 2024 10:00:00 GMT", "title": "France Election Results"},
+        meta={
+            "source_id": "reuters", "is_image": True, "url": "http://reuters.com/1",
+            "published": "Mon, 01 Jan 2024 10:00:00 GMT", "title": "France Election Results",
+            "decomposed": True, "role_figments": [who.figment_id, what.figment_id, when.figment_id],
+        },
         figment_id="a1", trust=0.9,
     )
+
+    who_b = _role_figment("who", "Election Commission", "b1")
+    what_b = _role_figment("what", "Election held", "b1")
+    when_b = _role_figment("when", "Wednesday", "b1")
+
     b = Figment.create(
         text="The Election results were announced.", boundary=np.zeros(8, dtype="float32"),
-        meta={"source_id": "blog", "is_image": True, "url": "http://blog.com/1",
-              "published": "Tue, 02 Jan 2024 10:00:00 GMT", "title": "France Election Results Announced"},
+        meta={
+            "source_id": "blog", "is_image": True, "url": "http://blog.com/1",
+            "published": "Tue, 02 Jan 2024 10:00:00 GMT", "title": "France Election Results Announced",
+            "decomposed": True, "role_figments": [who_b.figment_id, what_b.figment_id, when_b.figment_id],
+        },
         figment_id="b1", trust=0.5,
     )
-    store.upsert([a, b], hidden_size=8)
+
+    store.upsert([a, b, who, what, when, who_b, what_b, when_b], hidden_size=8)
     lineage_mod.compute_lineage(store)
     trust_mod.update_trust(store)
     return store, a, b

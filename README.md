@@ -32,43 +32,55 @@ independent documents. Here's the data flow:
                     │  (boundary) │  Each sentence gets a boundary vector
                     └──────┬──────┘
                            │
-              ┌────────────┼────────────┐
-              │            │            │
-       ┌──────▼──────┐ ┌──▼────┐ ┌─────▼─────┐
-       │ Decompose   │ │ Trust │ │ Lineage   │
-       │ (background)│ │       │ │           │
-       └──────┬──────┘ └──┬────┘ └─────┬─────┘
-              │           │            │
-              │    ┌──────▼──────┐     │
-              │    │  Narratives │─────┘
-              │    │  (clusters) │  Entity overlap → story clusters
-              │    └──────┬──────┘
-              │           │
-       ┌──────▼──────┐ ┌──▼──────┐
-       │  Evaluate   │ │ Brief   │
-       │  (LLM)      │ │ (LLM)  │
-       └──────┬──────┘ └──┬──────┘
-              │           │
-       ┌──────▼───────────▼──────┐
-       │     Web UI / API        │
-       └─────────────────────────┘
+                    ┌──────▼──────┐
+                    │ Decompose   │  WHO/WHAT/WHERE/WHEN/WHY/HOW role figments
+                    │ (external   │  via external LLM, 3 parallel workers
+                    │  LLM)       │
+                    └──────┬──────┘
+                           │
+               ┌───────────┼───────────┐
+               │                       │
+        ┌──────▼──────┐         ┌─────▼─────┐
+        │   Trust     │         │ Lineage   │
+        │             │         │           │
+        └──────┬──────┘         └─────┬─────┘
+               │                      │
+               │    ┌─────────────────▼─────┐
+               └───►│    Narratives         │
+                    │    (role figment      │
+                    │     clustering)       │
+                    └──────────┬────────────┘
+                               │
+               ┌───────────────┼───────────────┐
+               │               │               │
+        ┌──────▼──────┐ ┌─────▼─────┐  ┌──────▼──────┐
+        │  Evaluate   │ │ Summaries │  │   Brief     │
+        │  (LLM)      │ │ (local    │  │   (local    │
+        │             │ │  model)   │  │    model)   │
+        └──────┬──────┘ └───────────┘  └─────────────┘
+               │
+        ┌──────▼──────────────────────┐
+        │     Web UI / API            │
+        └─────────────────────────────┘
 ```
 
 ### Core Concepts
 
 **Figments** are the atomic unit. An article is an "image" figment containing
 child sentence figments. Each sentence can be decomposed into role figments
-(WHO, WHAT, WHERE, WHEN, WHY, HOW). The same role figment (e.g. "Trump" as WHO)
-reuses across multiple articles, creating a bipartite graph where narrative
-relationships emerge from figment overlap.
+(WHO, WHAT, WHERE, WHEN, WHY, HOW). The same role figment (e.g. "Joe Biden" as
+WHO) reuses across multiple articles via `hash(role + normalized_text)`
+deduplication, creating a bipartite graph where narrative relationships emerge
+from figment overlap.
 
 **Boundary vectors** (~10KB float32) are captured from the model's hidden state
 during ingestion. They enable similarity search, dedup, and frame-shift
 detection without re-running the model.
 
-**Narrative clustering** groups articles by entity overlap (Jaccard >= 0.30 with
->= 2 shared entities from titles). Each cluster becomes a "story" with first-
-reporter detection, derivative echo chains, and cross-source trust scores.
+**Narrative clustering** groups articles by shared role figments. Two articles
+share a narrative if they share >= 2 role figment IDs — exact semantic matching
+regardless of how different outlets phrase headlines. Falls back to boundary
+similarity (cosine > 0.95 within 48h) when the external LLM is not configured.
 
 **Self-correction** — an external LLM (Qwen 3.6 35B) reviews narrative clusters,
 flags miscategorized articles, and suggests corrections. Corrections accumulate
@@ -83,14 +95,14 @@ pip install -e .   # from figtree-news/ root (also install figtree first)
 ## Quick Start
 
 ```bash
-# 1. Configure sources
+# 1. Configure sources (edit demo/sources.json — add LLM URL, feeds, etc.)
 cp demo/sources.json ./sources.json
 
-# 2. Serve the web newspaper (includes background crawler)
+# 2. Serve the web newspaper (auto-starts continuous crawl)
 figtree-news serve --db demo/news.lance --sources demo/sources.json --host 0.0.0.0 --port 8000
 
 # 3. Standalone crawl (CLI)
-figtree-news crawl --interval 0 --max-articles 40
+figtree-news crawl --interval 300 --max-articles 15
 
 # 4. Standalone search
 figtree-news search "AI regulation" --time-range day --max 10
@@ -105,24 +117,25 @@ figtree-news search "AI regulation" --time-range day --max 10
 - Source pages with all articles + trust scores
 - Narrative pages with all source versions + frame-shift badges
 - Full-text search (SQLite FTS5) with date range filters
-- **Responsive slide-out control panel (900px max, 95vw)** for all crawl + search settings
-- **Sticky crawl action bar** at top of panel — Run Once / Start Continuous / Stop + mode indicator
+- Responsive slide-out control panel for all crawl + search settings
+- Sticky crawl action bar — Run Once / Start Continuous / Stop + mode indicator
 - WebSocket live updates — page auto-refreshes on new content
 - Dark theme (benthic.io style)
+- JavaScript extracted to `static/app.js` for clean separation
 
 ### Crawl Control Panel
 
 | Control | Default | Description |
 |---------|---------|-------------|
-| Max articles | 40 | Cap per tick |
+| Max articles | 15 | Cap per tick (1 per feed) |
 | Max stories | 0 (unlimited) | Cap narratives per pipeline run |
-| Pause between ticks | 0 | Seconds between ticks (0 = continuous) |
+| Pause between ticks | 300 | Seconds between ticks (continuous mode) |
 | Compute KV cache | off | Cache K/V for boundary-based generation |
-| Enable LLM Review | off | External LLM cluster validation + self-correction |
+| Enable LLM Review | on | External LLM cluster validation + self-correction |
 | Smart crawl | on | Auto-switch: forward when new articles found, backward when stuck |
 | **Web Search (SearXNG)** | | |
 | Enable web search | on | Toggle SearXNG search |
-| Time range | Last week | day / week / month / year / anytime |
+| Time range | Day | day / week / month / year / anytime |
 | Categories | News | news / general / general,news |
 | **Search queries** | **auto** | **Keywords extracted from RSS article titles/text each tick** |
 
@@ -141,13 +154,14 @@ to generic news queries if no articles were added.
 ### Decomposition Engine
 
 Background extraction of WHO/WHAT/WHERE/WHEN/WHY/HOW role figments from
-each sentence, using 3 parallel workers and the external LLM. Enables
-structured search: "who was involved in X?" → find all WHO figments.
+each sentence, using 3 parallel workers and the external LLM. Runs as
+Phase 1 of the pipeline (before clustering), so narratives are built from
+the semantic role graph rather than text heuristics.
 
 ### Cogitation Engine
 
-Periodic "dreaming" phase (default 6h interval):
-1. Duplicate merging — merge semantically similar figments
+Periodic insight generation (default 30min interval):
+1. Duplicate merging — merge semantically similar role figments
 2. Relationship discovery — co-occurrence patterns
 3. Insight generation — LLM-generated landscape insights
 
@@ -159,20 +173,20 @@ External LLM (Qwen 3.6 35B) validates pipeline output:
 - **Brief review** — critiques world brief for accuracy
 - **Self-correction** — corrections accumulate, auto-apply at threshold (default 2)
 
-## Pipeline (8 phases)
+## Pipeline
 
 ```
-crawl → ingest → decompose → trust → lineage → evaluate → summaries → brief
+crawl → ingest → decompose (external LLM) → trust → lineage (role figment clustering) → summaries → brief → eval
 ```
 
 1. **Crawl**: RSS feeds + SearXNG search + bounded link-follower (URL dedup, robots.txt)
-2. **Ingest**: Articles → figments (sentence-level + image + video)
-3. **Decompose**: WHO/WHAT/WHERE/WHEN/WHY/HOW role figments (background, 3 workers)
+2. **Ingest**: Articles → figments (sentence-level + image + video), VRAM cleared per article
+3. **Decompose**: WHO/WHAT/WHERE/WHEN/WHY/HOW role figments (external LLM, 3 workers)
 4. **Trust**: Source trust propagation (idempotent, store-persisted)
-5. **Lineage**: Narrative clustering via entity overlap + frame shift detection
-6. **Evaluate**: LLM cluster review + frame shift check
-7. **Summaries**: Per-article summaries
-8. **Brief**: World brief (2-3 sentences)
+5. **Lineage**: Narrative clustering via role figment overlap + frame shift detection
+6. **Summaries**: Per-article summaries (local model, max 10 per tick)
+7. **Brief**: World brief (2-3 sentences, local model)
+8. **Eval**: LLM cluster review + frame shift check + self-correction
 
 ## Architecture
 
@@ -182,12 +196,12 @@ figtree_news/
 ├── config.py           # SourceRegistry: source config + SearXNG + LLM settings
 ├── searxng.py          # SearXNG client + article extraction
 ├── ingest.py           # Feed/article → figments with provenance
-├── crawler.py          # Crawler: feeds + SearXNG + BFS link-follower
-├── pipeline.py         # 8-phase pipeline orchestration
-├── lineage.py          # Narrative clustering + frame shift + derivative edges
+├── crawler.py          # Crawler: feeds + SearXNG + BFS link-follower (thread-safe)
+├── pipeline.py         # Parallel pipeline orchestration (ThreadPoolExecutor)
+├── lineage.py          # Role figment clustering + frame shift + derivative edges
 ├── trust.py            # Source trust propagation
-├── decompose.py        # WHO/WHAT/WHERE/WHEN/WHY/HOW extraction (3 workers)
-├── cogitate.py         # Background consolidation + insights
+├── decompose.py        # WHO/WHAT/WHERE/WHEN/WHY/HOW extraction + inline cogitation
+├── cogitate.py         # Periodic insight generation
 ├── evaluate.py         # External LLM evaluation: clusters, frame shift, brief
 ├── correct.py          # Self-correction: confirmation threshold + auto-apply
 ├── llm_config.py       # External LLM configuration
@@ -197,15 +211,15 @@ figtree_news/
 ├── eval.py             # Per-source faithful-recall eval
 ├── export.py           # Graph export as JSON
 └── web/
-    ├── serve.py         # FastAPI app: HTML pages + JSON API + WebSocket
+    ├── serve.py         # FastAPI app: HTML pages + JSON API + WebSocket + auto-crawl
     ├── templates/       # Jinja2 HTML templates
-    └── static/          # CSS (dark theme)
+    └── static/          # CSS + JS (dark theme, extracted app.js)
 ```
 
 ### Source Registry
 
 `sources.json` maps `source_id → {name, base_trust, url, kind, logo_url}`.
-Demo ships with 15 sources (7 RSS + 8 YouTube).
+Demo ships with 15 sources (7 RSS + 8 YouTube) + SearXNG + external LLM config.
 
 ### Data Storage
 
@@ -213,7 +227,7 @@ Demo ships with 15 sources (7 RSS + 8 YouTube).
 - **SQLite FTS5** — full-text search index (`{db}_fts.db`)
 - **seen_urls.json** — URL dedup (runtime, gitignored)
 - **KV cache** (optional) — quantized K/V for boundary-based generation
-- **sources.json** — feeds, seeds, SearXNG/LLM config, **and crawler state** (continuous mode, smart crawl, interval, mode, last run timestamp)
+- **sources.json** — feeds, seeds, SearXNG/LLM config, crawler state
 
 ## CLI Reference
 
@@ -221,8 +235,8 @@ Demo ships with 15 sources (7 RSS + 8 YouTube).
 figtree-news crawl [OPTIONS]
   --feed source=url         Add feed (repeatable)
   --seed url                Add seed URL (repeatable)
-  --interval N              Seconds between ticks, 0 = continuous (default: 0)
-  --max-articles N          Cap articles per tick (default: 40)
+  --interval N              Seconds between ticks (default: 300)
+  --max-articles N          Cap articles per tick (default: 15)
   --max-stories N           Cap narratives, 0 = unlimited (default: 0)
   --since YYYY-MM-DD        Only ingest after this date
   --before YYYY-MM-DD       Only ingest before this date
@@ -255,6 +269,15 @@ All tests run CPU-only (no GPU required).
 
 - **Local (ingestion/summaries)**: Qwen3-4B (unsloth bnb-4bit), ~3GB VRAM
 - **External (eval/decomposition)**: Qwen 3.6 35B at configurable URL
+
+## GPU Memory Management
+
+The system runs on a 3GB GPU with careful VRAM management:
+- `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` reduces fragmentation
+- VRAM cleared before each article ingestion
+- SearXNG queries run sequentially (not parallel) to avoid GPU spikes
+- VRAM check before summaries/brief — skips if < 200MB free
+- Max 10 summaries per tick to limit GPU work
 
 ## License
 

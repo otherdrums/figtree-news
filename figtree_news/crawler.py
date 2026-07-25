@@ -18,7 +18,6 @@ from __future__ import annotations
 import os
 import re
 import threading
-import time
 from collections import Counter
 from functools import lru_cache
 from urllib.parse import urljoin, urlparse
@@ -34,25 +33,9 @@ from .search_index import get_index
 
 # Built-in stopwords for keyword extraction (zero deps)
 _STOPWORDS = {
-    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "from", "as", "is", "was", "are", "were", "been", "be", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "must", "can", "this", "that", "these", "those", "it", "its", "their", "they", "them", "he", "she", "we", "you", "i", "said", "says", "according", "report", "reports", "reported", "news", "new", "today", "week", "month", "year", "time", "times", "day", "days", "month", "months", "year", "years", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "first", "last", "next", "previous", "new", "old", "big", "small", "large", "great", "good", "bad", "high", "low", "long", "short", "early", "late", "right", "left", "up", "down", "out", "in", "over", "under", "again", "also", "just", "now", "then", "than", "more", "most", "some", "any", "all", "many", "much", "few", "less", "least", "very", "really", "such", "only", "even", "still", "yet", "already", "ever", "never", "always", "often", "sometimes", "usually", "rarely", "seldom", "daily", "weekly", "monthly", "yearly",
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "from", "as", "is", "was", "are", "were", "been", "be", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "must", "can", "this", "that", "these", "those", "it", "its", "their", "they", "them", "he", "she", "we", "you", "i", "said", "says", "according", "report", "reports", "reported", "news", "new", "today", "week", "month", "year", "time", "times", "day", "days", "month", "months", "year", "years", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "first", "last", "next", "previous", "new", "old", "big", "small", "large", "great", "good", "bad", "high", "low", "long", "short", "early", "late", "right", "left", "up", "down", "out", "in", "over", "under", "again", "also", "just", "now", "then", "than", "more", "most", "some", "any", "all", "each", "every", "other", "another", "such", "only", "even", "still", "already", "ever", "never", "always", "often", "sometimes", "usually", "breaking", "update", "more", "latest", "current",
 }
 
-def _extract_keywords(texts: list[str], top_n: int = 10) -> list[str]:
-    """Extract top keywords from a list of texts using simple frequency analysis."""
-    if not texts:
-        return []
-    words = []
-    for text in texts:
-        if not text:
-            continue
-        # Split on non-alphanumeric, lowercase, filter
-        for w in re.split(r"[^a-zA-Z0-9]+", text.lower()):
-            if len(w) >= 4 and w not in _STOPWORDS and not w.isdigit():
-                words.append(w)
-    if not words:
-        return []
-    freq = Counter(words)
-    return [w for w, _ in freq.most_common(top_n)]
 
 USER_AGENT = "figtree-news/0.1 (+https://github.com/otherdrums/figtree-news; research crawler)"
 
@@ -103,15 +86,8 @@ def _extract_og_image(html: str) -> str | None:
     return None
 
 
-# Built-in stopwords for keyword extraction (zero external deps)
-_STOPWORDS = {
-    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "from", "as", "is", "was", "are", "were", "been", "be", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "must", "can", "this", "that", "these", "those", "it", "its", "their", "they", "them", "he", "she", "we", "you", "i", "said", "says", "according", "report", "reports", "news", "today", "yesterday", "week", "month", "year", "new", "old", "first", "last", "next", "previous", "current", "latest", "breaking", "update", "updates", "latest", "more", "most", "less", "many", "much", "some", "any", "all", "each", "every", "other", "another", "such", "only", "just", "also", "still", "even", "now", "then", "when", "where", "why", "how", "what", "who", "which", "whose", "whom", "there", "here", "out", "up", "down", "over", "under", "again", "once", "twice", "times", "time", "day", "days", "week", "weeks", "month", "months", "year", "years"
-}
-
-
 def _extract_keywords(articles: list[dict], top_n: int = 10) -> list[str]:
     """Extract top keywords from article titles and text."""
-    from collections import Counter
     import re
     
     word_counts = Counter()
@@ -154,7 +130,9 @@ class Crawler:
         self.seen: set[str] = self._load_seen()
         self._pending_decompose: list[str] = []
         self._pending_lock = threading.Lock()
-        self._new_articles: list[dict] = []  # Track newly ingested articles for keyword extraction
+        self._ingest_lock = threading.Lock()
+        self._model_lock = threading.Lock()
+        self._new_articles: list[dict] = []
 
     # -- URL de-duplication ------------------------------------------------ #
     def _load_seen(self) -> set[str]:
@@ -177,12 +155,14 @@ class Crawler:
             _json.dump(sorted(self.seen), fh)
 
     def _already(self, url: str) -> bool:
-        return url in self.seen
+        with self._ingest_lock:
+            return url in self.seen
 
     def _mark(self, url: str) -> None:
         if url:
-            self.seen.add(url)
-            self._save_seen()
+            with self._ingest_lock:
+                self.seen.add(url)
+                self._save_seen()
 
     # -- extraction -------------------------------------------------------- #
     def _can_fetch(self, url: str) -> bool:
@@ -256,16 +236,20 @@ class Crawler:
                 self._mark(url)
             return False
 
-        ingest_articles(
-            self.model,
-            self.tokenizer,
-            self.store,
-            self.registry,
-            [article],
-            compute_kv=self.compute_kv,
-            summarize_images=self.summarize_images,
-            kv_manager=self.kv_manager,
-        )
+        with self._model_lock:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            ingest_articles(
+                self.model,
+                self.tokenizer,
+                self.store,
+                self.registry,
+                [article],
+                compute_kv=self.compute_kv,
+                summarize_images=self.summarize_images,
+                kv_manager=self.kv_manager,
+            )
         
         # Queue for background decomposition (thread-safe: append to list,
         # the async caller drains it after to_thread returns)
@@ -282,11 +266,11 @@ class Crawler:
         
         if url:
             self._mark(url)
-        # Track for keyword extraction
         title = article.get("title") or ""
         text = article.get("text") or ""
         if title or text:
-            self._new_articles.append({"title": title, "text": text})
+            with self._ingest_lock:
+                self._new_articles.append({"title": title, "text": text})
         return True
 
     def drain_pending_decompose(self) -> list[str]:
@@ -298,7 +282,12 @@ class Crawler:
 
     def crawl_feed(self, source_id: str, feed_uri: str, max_articles: int | None = None,
                    since: str = "", before: str = "") -> int:
-        articles = _read_feed(feed_uri, source_id, since=since, before=before)
+        try:
+            articles = _read_feed(feed_uri, source_id, since=since, before=before)
+        except Exception as e:
+            print(f"[crawler] {source_id}: failed to read feed - {e}")
+            return 0
+            
         total_in_feed = len(articles)
         added = 0
         skipped_dedup = 0

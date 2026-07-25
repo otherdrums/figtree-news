@@ -38,6 +38,13 @@ def ensure_article_summaries(
         f.meta["summary"] = result.get("generated_text", "").strip()
         updated.append(f)
         done += 1
+        
+        # Clear GPU cache every 5 summaries to prevent OOM on low-VRAM GPUs
+        if done % 5 == 0:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        
         if done >= limit:
             break
     if updated:
@@ -47,17 +54,22 @@ def ensure_article_summaries(
 
 
 def build_world_brief(
-    model, tokenizer, store: FigmentStore, *, all_figs: list | None = None, top_n: int = 8
+    model, tokenizer, store: FigmentStore, *, all_figs: list | None = None, top_n: int = 2
 ) -> dict[str, Any]:
     """Generate a combined brief over the top narratives; persist as a figment."""
+    # Clear VRAM before brief generation to prevent OOM
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
     narratives = get_narratives(store)[:top_n]
     members: list[str] = []
     for n in narratives:
-        members.extend(n["members"][:2])
+        members.extend(n["members"][:1])  # Only 1 article per narrative to reduce context
     figs = {f.figment_id: f for f in _article_images(store, all_figs=all_figs)}
     selected = [figs[mid] for mid in dict.fromkeys(members) if mid in figs][:top_n]
     if not selected:
-        print(f"[brief] no articles selected for brief generation")
+        print("[brief] no articles selected for brief generation")
         return {"brief": "", "used": 0}
 
     print(f"[brief] generating from {len(selected)} articles:")
@@ -70,7 +82,7 @@ def build_world_brief(
     result = gen.generate(
         selected,
         "Write a brief world news summary covering the following reports.",
-        max_new_tokens=300,
+        max_new_tokens=150,
     )
     brief = result.get("generated_text", "").strip()
     print(f"[brief] generated {len(brief)} chars: {brief[:100]}...")

@@ -18,6 +18,8 @@ import time
 import warnings
 from typing import Any
 
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 
 warnings.filterwarnings("ignore", message=".*_check_is_size.*")
@@ -47,7 +49,7 @@ from figtree.kv_cache_manager import KVCacheManager
 from .. import summarize_news
 from ..config import SourceRegistry
 from ..crawler import Crawler
-from ..lineage import get_narratives, get_derivatives, source_agenda, compute_lineage
+from ..lineage import get_narratives, get_derivatives, source_agenda, _normalize_source
 from ..llm_config import LLMConfig
 from ..pipeline import run_pipeline
 from ..query import query as run_query
@@ -116,8 +118,8 @@ _crawl_state: dict[str, Any] = {
     "start_time": None,
     "feeds": [],
     "seeds": [],
-    "max_articles": 40,
-    "interval": 3600,
+    "max_articles": 15,
+    "interval": 300,
     "compute_kv": False,
     "summarize": True,
 }
@@ -126,18 +128,15 @@ _crawl_mode: str = "forward"
 _consecutive_empty_ticks: int = 0
 _backward_time_range = "last_month"
 
-# Time range progression for backward mode
 _TIME_RANGE_PROGRESSION = ["day", "last_week", "last_month", "last_year", "all"]
 
+
 def _next_time_range(current: str) -> str:
-    """Return the next older time range in backward mode."""
     try:
         idx = _TIME_RANGE_PROGRESSION.index(current)
         return _TIME_RANGE_PROGRESSION[min(idx + 1, len(_TIME_RANGE_PROGRESSION) - 1)]
     except ValueError:
         return "last_month"
-_crawl_mode: str = "forward"  # forward or backward
-_consecutive_empty_ticks: int = 0
 
 
 async def _drain_decompose(crawler):
@@ -231,8 +230,8 @@ async def _run_crawl_tick(
     before: str = "",
     llm_enabled: bool = False,
 ):
-    """Single crawl tick. Heavy (model) work runs in threads so the event loop stays free."""
-    global _crawl_state
+    """Single crawl tick. Feeds+seeds run in parallel; SearXNG queries run in parallel."""
+    global _crawl_state, _consecutive_empty_ticks, _crawl_mode, _backward_time_range
     _crawl_state["running"] = True
     _crawl_state["start_time"] = time.time()
     _crawl_state["current_step"] = "loading_model"
@@ -242,7 +241,6 @@ async def _run_crawl_tick(
     await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
     try:
-        # Load model once and reuse across ticks to avoid GPU OOM
         cache_key = model_id
         if cache_key in _model_cache:
             model, tokenizer = _model_cache[cache_key]
@@ -268,70 +266,67 @@ async def _run_crawl_tick(
             decompose_engine=_decompose_engine,
         )
 
-        _crawl_state["current_step"] = "crawling_feeds"
-        _crawl_state["message"] = f"Crawling {len(feeds)} feeds..."
+        # ── Phase 1: Parallel feeds + seeds ────────────────────────────────
+        _crawl_state["current_step"] = "crawling"
+        _crawl_state["message"] = f"Crawling {len(feeds)} feeds + {len(seeds)} seeds in parallel..."
         _crawl_state["feeds"] = list(feeds.keys())
-        _crawl_state["total"] = len(feeds)
+        per_feed = max(1, max_articles // max(len(feeds), 1))
+        _crawl_state["total"] = len(feeds) + (1 if seeds else 0)
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
-        stats = {"feeds_added": 0, "seeds_added": 0, "sources": set()}
-        per_feed = max(1, max_articles // len(feeds)) if feeds else max_articles
-        budget = max_articles
-
-        for i, (sid, uri) in enumerate(feeds.items()):
-            if budget <= 0 or _crawl_state.get("stop_requested"):
-                break
-            _crawl_state["current_step"] = f"crawling_feed:{sid}"
-            _crawl_state["progress"] = i
-            _crawl_state["message"] = f"Crawling {sid} ({i+1}/{len(feeds)})"
-            await _broadcast({"type": "crawl_status", "data": _crawl_state})
-
-            # Run feed crawl in thread so loop stays free
+        async def _crawl_one_feed(sid: str, uri: str) -> tuple[str, int]:
             added = await asyncio.to_thread(
-                crawler.crawl_feed, sid, uri, min(per_feed, budget),
+                crawler.crawl_feed, sid, uri, per_feed,
                 since=since, before=before,
             )
-            await _drain_decompose(crawler)
-            print(f"[crawl] {sid}: +{added} articles")
-            stats["feeds_added"] += added
-            stats["sources"].add(sid)
-            budget -= added
+            return sid, added
 
-            # Broadcast content update so the page can refresh live
-            if added > 0:
-                _data_cache["data"] = None
-                _warm_cache(store)
-                await _broadcast({"type": "content_update", "data": {
-                    "source": sid, "added": added,
-                    "total_articles": get_index(db.replace(".lance", "_fts.db")).article_count(),
-                }})
+        async def _crawl_seeds_task() -> int:
+            return await asyncio.to_thread(crawler.crawl_seeds, seeds)
+
+        feed_tasks = [_crawl_one_feed(sid, uri) for sid, uri in feeds.items()]
+        seed_task = _crawl_seeds_task() if seeds else None
+        all_tasks = feed_tasks + ([seed_task] if seed_task else [])
+
+        results = await asyncio.gather(*all_tasks, return_exceptions=True)
+
+        feeds_added = 0
+        seeds_added = 0
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                print(f"[crawl] task {i} failed: {result}")
+                continue
+            if i < len(feed_tasks):
+                sid, added = result
+                feeds_added += added
+                if added > 0:
+                    print(f"[crawl] {sid}: +{added} articles")
+            else:
+                seeds_added = result
+
+        await _drain_decompose(crawler)
+
+        if feeds_added > 0 or seeds_added > 0:
+            _data_cache["data"] = None
+            _warm_cache(store)
+            await _broadcast({"type": "content_update", "data": {
+                "feeds_added": feeds_added, "seeds_added": seeds_added,
+                "total_articles": get_index().article_count(),
+            }})
 
         if _crawl_state.get("stop_requested"):
             raise asyncio.CancelledError("Stop requested")
 
-        if seeds and budget > 0:
-            _crawl_state["current_step"] = "crawling_seeds"
-            _crawl_state["message"] = f"Crawling {len(seeds)} seed URLs..."
-            _crawl_state["total"] = len(seeds)
-            _crawl_state["progress"] = 0
-            await _broadcast({"type": "crawl_status", "data": _crawl_state})
-            added = await asyncio.to_thread(crawler.crawl_seeds, seeds)
-            await _drain_decompose(crawler)
-            stats["seeds_added"] += added
-
-        if _crawl_state.get("stop_requested"):
-            raise asyncio.CancelledError("Stop requested")
-
-        # SearXNG web search — independent budget (not consumed by feeds)
+        # ── Phase 2: Parallel SearXNG queries ──────────────────────────────
         search_added = 0
         cfg = registry.searxng
         if cfg and cfg.enabled:
             _crawl_state["current_step"] = "searching"
-            
-            # Extract keywords from articles added this tick
+
             from figtree_news.crawler import _extract_keywords
-            queries = _extract_keywords(crawler._new_articles, top_n=10)
-            # Fallback to generic news queries if no articles were added
+            with crawler._ingest_lock:
+                new_articles_snapshot = list(crawler._new_articles)
+            queries = _extract_keywords(new_articles_snapshot, top_n=10)
             if not queries:
                 queries = [
                     "breaking news",
@@ -340,17 +335,15 @@ async def _run_crawl_tick(
                     "business markets",
                     "politics government",
                 ]
-            
-            _crawl_state["message"] = f"Searching {len(queries)} queries..."
-            _crawl_state["total"] = len(queries)
-            _crawl_state["progress"] = 0
-            await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
-            # Expand time range in backward mode
             srch_time_range = cfg.time_range
             if _crawl_mode == "backward":
                 srch_time_range = _backward_time_range
-                _crawl_state["message"] = f"Searching (backward: {srch_time_range})..."
+
+            _crawl_state["message"] = f"Searching {len(queries)} queries sequentially ({srch_time_range})..."
+            _crawl_state["total"] = len(queries)
+            _crawl_state["progress"] = 0
+            await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
             for qi, q in enumerate(queries):
                 if _crawl_state.get("stop_requested"):
@@ -358,18 +351,21 @@ async def _run_crawl_tick(
                 _crawl_state["progress"] = qi
                 _crawl_state["message"] = f"Searching ({srch_time_range}): {q}"
                 await _broadcast({"type": "crawl_status", "data": _crawl_state})
-                got = await asyncio.to_thread(
-                    crawler.search_searxng, q,
-                    categories=cfg.categories, time_range=srch_time_range,
-                    max_results=cfg.max_results, pages=cfg.pages,
-                )
+                try:
+                    got = await asyncio.to_thread(
+                        crawler.search_searxng, q,
+                        categories=cfg.categories, time_range=srch_time_range,
+                        max_results=cfg.max_results, pages=cfg.pages,
+                    )
+                    search_added += got
+                except Exception as exc:
+                    print(f"[crawl] search '{q}' failed: {exc}")
                 await _drain_decompose(crawler)
-                search_added += got
             print(f"[crawl] SearXNG: +{search_added} articles across {len(queries)} queries (mode: {_crawl_mode})")
 
-        total_new = stats.get("feeds_added", 0) + stats.get("seeds_added", 0) + search_added
+        total_new = feeds_added + seeds_added + search_added
 
-        # --- Backward/forward mode auto-switch ---
+        # ── Backward/forward mode auto-switch ──────────────────────────────
         if total_new > 0:
             _consecutive_empty_ticks = 0
             if _crawl_mode == "backward":
@@ -383,7 +379,6 @@ async def _run_crawl_tick(
                 _backward_time_range = "last_month"
                 print("[crawl] no new articles → mode → backward")
             elif _crawl_mode == "backward" and total_new == 0:
-                # Expand backward range further
                 _backward_time_range = _next_time_range(_backward_time_range)
                 if _backward_time_range == "all":
                     _backward_time_range = "last_month"
@@ -398,17 +393,16 @@ async def _run_crawl_tick(
         if _crawl_state.get("stop_requested"):
             raise asyncio.CancelledError("Stop requested")
 
+        # ── Phase 3: Pipeline ──────────────────────────────────────────────
         _crawl_state["current_step"] = "pipeline"
         _crawl_state["message"] = "Running pipeline (trust, lineage, summaries, brief)..."
         _crawl_state["progress"] = 0
         _crawl_state["total"] = 4
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
-        # Run pipeline in thread
         llm_config = LLMConfig.from_sources_json(sources_path)
         if llm_enabled and llm_config.url:
             llm_config.enabled = True
-            _crawl_state["current_step"] = "pipeline"
             _crawl_state["message"] = "Running pipeline (trust, lineage, eval, summaries, brief)..."
             _crawl_state["total"] = 6
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
@@ -416,13 +410,19 @@ async def _run_crawl_tick(
         pipe_stats = await asyncio.to_thread(
             run_pipeline, model, tokenizer, store,
             do_summaries=summarize, do_brief=True, max_stories=max_stories,
+            max_summaries=10,
             llm_config=llm_config if llm_enabled and llm_config.url else None,
+            decompose_engine=_decompose_engine,
         )
         _crawl_state["progress"] = 4
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
-        stats["sources"] = sorted(stats["sources"])
-        stats["search_added"] = search_added
+        stats = {
+            "feeds_added": feeds_added,
+            "seeds_added": seeds_added,
+            "search_added": search_added,
+            "sources": sorted({sid for sid, _ in [r for r in results if not isinstance(r, Exception) and isinstance(r, tuple)]}),
+        }
         stats.update(pipe_stats)
         n_narr = pipe_stats.get("narratives", [])
         n_narr = len(n_narr) if isinstance(n_narr, list) else n_narr
@@ -430,10 +430,10 @@ async def _run_crawl_tick(
         _crawl_state["stats"] = stats
         _crawl_state["running"] = False
         _crawl_state["current_step"] = "done"
-        _crawl_state["message"] = f"Done: {stats.get('feeds_added',0)} new articles, {stats.get('narratives',0)} narratives"
+        _crawl_state["message"] = f"Done: {feeds_added + seeds_added + search_added} new articles, {n_narr} narratives"
         _data_cache["data"] = None
         _warm_cache(store)
-        print(f"[crawl] tick complete — {stats.get('feeds_added',0)} new articles, {n_narr} narratives")
+        print(f"[crawl] tick complete — {feeds_added + seeds_added + search_added} new articles, {n_narr} narratives")
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
     except asyncio.CancelledError:
@@ -541,7 +541,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         from ..cogitate import CogitationEngine
         
         _decompose_engine = DecompositionEngine(llm_config, store)
-        _cogitate_engine = CogitationEngine(llm_config, store, interval_hours=6)
+        _cogitate_engine = CogitationEngine(llm_config, store, interval_hours=0.5)
         
         app.state.decompose_engine = _decompose_engine
         app.state.cogitate_engine = _cogitate_engine
@@ -558,43 +558,48 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         if _cogitate_engine:
             _cogitate_engine.start()
 
+        cs = registry.crawler_state
+        auto_start = cs.continuous or (search_idx.article_count() < 50)
+        if auto_start and not _crawl_state.get("running"):
+            interval = max(int(cs.interval) if cs.interval else 300, 60)
+            max_arts = cs.max_articles or 100
+            feeds = registry.feeds
+            seeds = registry.seeds
+            if feeds or seeds or (registry.searxng and registry.searxng.enabled):
+                print(f"[startup] auto-starting continuous crawl (interval={interval}s, max_articles={max_arts})")
+                task = asyncio.create_task(
+                    _run_continuous_crawl(
+                        store, sources, feeds, seeds, max_arts,
+                        summarize=True, compute_kv=False,
+                        model_id="unsloth/Qwen3-4B-bnb-4bit",
+                        interval=interval,
+                        max_stories=cs.max_stories,
+                        llm_enabled=cs.llm_enabled,
+                    )
+                )
+                _crawl_state["task"] = task
+
     @app.on_event("shutdown")
     async def shutdown_event():
         global _decompose_engine, _cogitate_engine
-        # Cancel crawl task if running
+        _crawl_state["stop_requested"] = True
+        _crawl_state["running"] = False
         if _crawl_state.get("task") and not _crawl_state["task"].done():
             _crawl_state["task"].cancel()
             try:
-                await asyncio.wait_for(_crawl_state["task"], timeout=5.0)
-            except asyncio.TimeoutError:
+                await asyncio.wait_for(_crawl_state["task"], timeout=3.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
                 pass
-        # Cancel all background tasks gracefully
         if _decompose_engine:
             _decompose_engine.stop()
-            # Wait for workers to finish cancellation
             for worker in getattr(_decompose_engine, '_workers', []):
-                try:
-                    await asyncio.wait_for(worker, timeout=5.0)
-                except asyncio.TimeoutError:
-                    pass
+                worker.cancel()
         if _cogitate_engine:
             _cogitate_engine.stop()
-            if getattr(_cogitate_engine, '_task', None):
-                try:
-                    await asyncio.wait_for(_cogitate_engine._task, timeout=5.0)
-                except asyncio.TimeoutError:
-                    pass
 
-    # Signal handlers for graceful shutdown on SIGINT/SIGTERM
-    def _handle_shutdown_signal(signum, frame):
-        # Create a new event loop or use existing one to trigger shutdown
-        loop = asyncio.get_event_loop()
-        loop.call_soon_threadsafe(lambda: asyncio.create_task(shutdown_event()))
-
-    # Register signal handlers for graceful shutdown
-    import signal
-    signal.signal(signal.SIGINT, _handle_shutdown_signal)
-    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+    # Let uvicorn handle SIGINT/SIGTERM natively. The shutdown_event above
+    # is called by FastAPI's lifespan management when uvicorn stops. The
+    # crawl's stop_requested flag provides graceful crawl cancellation.
 
     def _render(request: Request, name: str, context: dict[str, Any]) -> HTMLResponse:
         template = templates.get_template(name)
@@ -941,6 +946,9 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
             stats = await asyncio.to_thread(
                 run_pipeline, model, tokenizer, store,
                 do_summaries=do_summaries, do_brief=do_brief, max_stories=max_stories,
+                max_summaries=10,
+                llm_config=LLMConfig.from_sources_json(sources),
+                decompose_engine=_decompose_engine,
             )
             _data_cache["data"] = None
             _warm_cache(store)

@@ -86,7 +86,7 @@ class DecompositionEngine:
                     await asyncio.sleep(0.1)
                 print(f"[decompose] Queued {len(needs_decomp)} existing articles for background processing")
             else:
-                print(f"[decompose] All existing articles already decomposed")
+                print("[decompose] All existing articles already decomposed")
         except Exception as exc:
             print(f"[decompose] Error queueing existing articles: {exc}")
             import traceback
@@ -98,7 +98,7 @@ class DecompositionEngine:
         for worker in self._workers:
             worker.cancel()
         self._workers.clear()
-        print(f"[decompose] All background workers stopped")
+        print("[decompose] All background workers stopped")
     
     async def queue_article(self, article_id: str):
         """Queue an article for decomposition."""
@@ -147,7 +147,6 @@ class DecompositionEngine:
             print(f"[decompose] Article {article_id[:8]} not found in store, skipping")
             return
         
-        # Get sentence children
         sentences = [self.store.get(fid) for fid in article.children]
         sentences = [s for s in sentences if s and not s.is_edge()]
         
@@ -157,17 +156,14 @@ class DecompositionEngine:
         
         role_figment_ids = []
         for sentence in sentences:
-            # Skip if already decomposed
             if sentence.meta.get('decomposed'):
                 role_figment_ids.extend(sentence.children)
                 continue
             
-            # Extract roles using LLM
             roles = await self._extract_roles(sentence.text, client)
             if not roles:
                 continue
             
-            # Create or reuse role figments
             sentence_role_ids = []
             for role in ROLES:
                 text = roles.get(role, '').strip()
@@ -182,18 +178,61 @@ class DecompositionEngine:
                 )
                 sentence_role_ids.append(figment.figment_id)
             
-            # Only mark decomposed if we actually created role figments
             if sentence_role_ids:
                 sentence.meta['decomposed'] = True
                 sentence.children.extend([fid for fid in sentence_role_ids if fid not in sentence.children])
                 self.store.upsert([sentence], hidden_size=sentence.boundary.shape[0])
                 role_figment_ids.extend(sentence_role_ids)
         
-        # Update article with role figment references
         if role_figment_ids:
             article.meta['role_figments'] = list(set(article.meta.get('role_figments', []) + role_figment_ids))
             self.store.upsert([article], hidden_size=article.boundary.shape[0])
-            print(f"[decompose] Article {article_id[:8]}: {len(role_figment_ids)} role figments")
+            
+            await self._create_cooccurrence_relationships(role_figment_ids)
+            
+            print(f"[decompose] Article {article_id[:8]}: {len(role_figment_ids)} role figments, relationships updated")
+    
+    async def _create_cooccurrence_relationships(self, role_figment_ids: list[str]):
+        """Create or strengthen relationship edges between co-occurring role figments.
+        
+        This is inline cogitation — as soon as roles are extracted from an article,
+        we link them. No need to wait for a periodic consolidation pass.
+        """
+        import hashlib
+        
+        unique_ids = list(set(role_figment_ids))
+        if len(unique_ids) < 2:
+            return
+        
+        to_upsert = []
+        for i, fig1_id in enumerate(unique_ids):
+            for fig2_id in unique_ids[i+1:]:
+                pair = tuple(sorted([fig1_id, fig2_id]))
+                rel_id = hashlib.sha256(f"rel:{pair[0]}:{pair[1]}".encode()).hexdigest()[:16]
+                
+                existing = self.store.get(rel_id)
+                if existing:
+                    existing.meta['weight'] = existing.meta.get('weight', 0) + 1
+                    to_upsert.append(existing)
+                else:
+                    fig1 = self.store.get(fig1_id)
+                    if fig1:
+                        rel = Figment.create(
+                            text=f"Relationship: {pair[0][:8]} <-> {pair[1][:8]}",
+                            boundary=fig1.boundary.copy(),
+                            meta={
+                                'edge_type': 'relationship',
+                                'figment_a': pair[0],
+                                'figment_b': pair[1],
+                                'weight': 1
+                            },
+                            figment_id=rel_id
+                        )
+                        to_upsert.append(rel)
+        
+        if to_upsert:
+            hidden = to_upsert[0].boundary.shape[0]
+            self.store.upsert(to_upsert, hidden_size=hidden)
     
     async def _extract_roles(self, sentence: str, client) -> dict[str, str]:
         """Use LLM to extract roles from sentence."""
