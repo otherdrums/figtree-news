@@ -561,6 +561,13 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     @app.on_event("shutdown")
     async def shutdown_event():
         global _decompose_engine, _cogitate_engine
+        # Cancel crawl task if running
+        if _crawl_state.get("task") and not _crawl_state["task"].done():
+            _crawl_state["task"].cancel()
+            try:
+                await asyncio.wait_for(_crawl_state["task"], timeout=5.0)
+            except asyncio.TimeoutError:
+                pass
         # Cancel all background tasks gracefully
         if _decompose_engine:
             _decompose_engine.stop()
