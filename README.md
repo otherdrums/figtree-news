@@ -73,6 +73,22 @@ WHO) reuses across multiple articles via `hash(role + normalized_text)`
 deduplication, creating a bipartite graph where narrative relationships emerge
 from figment overlap.
 
+**Association figments** link surface-form variants of the same entity
+("Donald Trump" ↔ "Trump" ↔ "DJT") so co-reference does not depend on
+perfect LLM normalization during decomposition. Associations are first-class,
+traversable figments. Auto-proposals fire at decompose time based on
+boundary similarity + string overlap + co-occurrence. Expansion walks
+association edges at query time (bounded, default 2 hops).
+
+**Multi-role intersection** finds narratives containing ALL specified roles
+(e.g. WHO:Trump AND WHERE:Disney World), expanding through associations
+first so variant forms resolve to the same entity. Results are ranked by
+trust, recency, source diversity, and frame shift.
+
+**Context materialization** assembles a provenance-preserving context package
+from intersection results — source attribution, trust scores, chronological
+ordering, frame information — ready for faithful model-native generation.
+
 **Boundary vectors** (~10KB float32) are captured from the model's hidden state
 during ingestion. They enable similarity search, dedup, and frame-shift
 detection without re-running the model.
@@ -198,18 +214,21 @@ figtree_news/
 ├── ingest.py           # Feed/article → figments with provenance
 ├── crawler.py          # Crawler: feeds + SearXNG + BFS link-follower (thread-safe)
 ├── pipeline.py         # Parallel pipeline orchestration (ThreadPoolExecutor)
-├── lineage.py          # Role figment clustering + frame shift + derivative edges
+├── lineage.py          # Role figment clustering + frame shift + derivatives (expands through associations)
 ├── trust.py            # Source trust propagation
-├── decompose.py        # WHO/WHAT/WHERE/WHEN/WHY/HOW extraction + inline cogitation
+├── decompose.py        # WHO/WHAT/WHERE/WHEN/WHY/HOW extraction + inline cogitation + auto-associations
 ├── cogitate.py         # Periodic insight generation
 ├── evaluate.py         # External LLM evaluation: clusters, frame shift, brief
 ├── correct.py          # Self-correction: confirmation threshold + auto-apply
 ├── llm_config.py       # External LLM configuration
 ├── summarize_news.py   # Per-article summaries + world brief
 ├── query.py            # Embed query → nearest figments → generate
-├── search_index.py     # SQLite FTS5 full-text search
-├── eval.py             # Per-source faithful-recall eval
+├── search_index.py     # SQLite FTS5 full-text search (thread-safe)
+├── associations.py     # Co-reference layer: association figments for surface-form variants
+├── intersection.py     # Multi-role intersection query: find narratives containing all specified roles
+├── context.py          # Context materialization: assemble structured context packages from narratives
 ├── export.py           # Graph export as JSON
+├── eval.py             # Per-source faithful-recall eval
 └── web/
     ├── serve.py         # FastAPI app: HTML pages + JSON API + WebSocket + auto-crawl
     ├── templates/       # Jinja2 HTML templates

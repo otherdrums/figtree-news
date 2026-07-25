@@ -59,20 +59,46 @@ def _articles(store: FigmentStore, *, all_figs: list | None = None) -> list[Figm
     ]
 
 
-def _cluster_by_roles(articles: list[Figment], min_shared: int = 2) -> list[list[Figment]]:
+def _cluster_by_roles(
+    store: FigmentStore | None,
+    articles: list[Figment],
+    min_shared: int = 2,
+    expand_associations: bool = True,
+) -> list[list[Figment]]:
     """Cluster articles by shared role figments.
 
     Two articles share a narrative if they share >= min_shared role figment IDs.
     Role figments are deduplicated by hash(role + normalized_text), so sharing
     a role figment ID means semantic identity.
 
+    When ``expand_associations`` is True and ``store`` is provided, each role
+    figment is expanded through association edges so that surface-form variants
+    (e.g. "Trump", "Donald Trump", "DJT") are treated as the same linking node.
+
     Articles without role figments (not yet decomposed) are left as singletons.
     """
+    # Build association groups once when expanding.
+    assoc_groups: dict[str, set[str]] = {}
+    if expand_associations and store is not None:
+        try:
+            from .associations import get_association_groups
+            assoc_groups = get_association_groups(store)
+        except Exception:
+            pass
+
     by_id = {f.figment_id: f for f in articles}
     article_roles: dict[str, set[str]] = {}
 
     for f in articles:
         role_ids = set(f.meta.get("role_figments", []))
+        if expand_associations and role_ids:
+            expanded: set[str] = set()
+            for rid in role_ids:
+                if rid in assoc_groups:
+                    expanded.update(assoc_groups[rid])
+                else:
+                    expanded.add(rid)
+            role_ids = expanded
         article_roles[f.figment_id] = role_ids
 
     parent = {f.figment_id: f.figment_id for f in articles}
@@ -196,7 +222,7 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
 
     if has_roles:
         print("[lineage]   Using role figment clustering")
-        clusters = _cluster_by_roles(articles)
+        clusters = _cluster_by_roles(store, articles)
     else:
         print("[lineage]   No role figments — using boundary similarity fallback")
         clusters = _cluster_by_boundary(articles)

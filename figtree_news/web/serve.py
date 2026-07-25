@@ -351,6 +351,19 @@ async def _run_crawl_tick(
                 _crawl_state["progress"] = qi
                 _crawl_state["message"] = f"Searching ({srch_time_range}): {q}"
                 await _broadcast({"type": "crawl_status", "data": _crawl_state})
+
+                # VRAM guard: stop SearXNG queries if GPU is running low
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    free, total = torch.cuda.mem_get_info()
+                    free_mb = free // (1024 * 1024)
+                    if free_mb < 500:
+                        print(f"[crawl] VRAM low ({free_mb}MB free) — stopping SearXNG queries to avoid OOM")
+                        _crawl_state["message"] = f"VRAM low ({free_mb}MB) — SearXNG queries stopped"
+                        await _broadcast({"type": "crawl_status", "data": _crawl_state})
+                        break
+
                 try:
                     got = await asyncio.to_thread(
                         crawler.search_searxng, q,
@@ -360,6 +373,8 @@ async def _run_crawl_tick(
                     search_added += got
                 except Exception as exc:
                     print(f"[crawl] search '{q}' failed: {exc}")
+                # Brief pause between queries to let CUDA reclaim fragmented memory
+                await asyncio.sleep(1)
                 await _drain_decompose(crawler)
             print(f"[crawl] SearXNG: +{search_added} articles across {len(queries)} queries (mode: {_crawl_mode})")
 
@@ -808,6 +823,96 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
 
         out = sorted(groups.values(), key=lambda g: g["count"], reverse=True)
         return {"roles": out, "range": range, "role_filter": role, "narrative_count": len(filtered_narrs)}
+
+    @app.post("/api/narratives/intersect")
+    async def api_intersect(request: Request):
+        """Multi-role intersection query.
+
+        Body: {
+            "roles": [{"role": "who", "text": "Donald Trump"}, ...],
+            "expand_associations": true,
+            "require_all": true,
+            "min_trust": 0.0,
+            "limit": 50,
+            "ranking": "trust_recency"
+        }
+
+        Returns ranked narratives that contain all (or any) specified roles,
+        expanded through association edges for co-reference.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return {"error": "Invalid JSON body", "narratives": []}
+
+        roles = body.get("roles", [])
+        if not roles:
+            return {"error": "No roles specified", "narratives": []}
+
+        from ..intersection import find_narratives
+
+        results = find_narratives(
+            store,
+            roles=roles,
+            expand_associations=body.get("expand_associations", True),
+            require_all=body.get("require_all", True),
+            min_trust=float(body.get("min_trust", 0.0)),
+            limit=int(body.get("limit", 50)),
+            ranking=body.get("ranking", "trust_recency"),
+        )
+
+        # Strip heavy fields for API response
+        lightweight = []
+        for n in results:
+            lightweight.append(
+                {
+                    "narrative_id": n.get("narrative_id"),
+                    "title": n.get("title", ""),
+                    "sources": n.get("sources", []),
+                    "members": n.get("members", []),
+                    "trust_score": n.get("trust_score", 0.5),
+                    "source_count": n.get("source_count", 0),
+                    "role_matches": n.get("role_matches", {}),
+                    "latest_article_date": n.get("latest_article_date", ""),
+                    "first_seen": n.get("first_seen", ""),
+                    "frame_shift": n.get("frame_shift", False),
+                }
+            )
+
+        return {"narratives": lightweight, "total": len(lightweight)}
+
+    @app.post("/api/context/materialize")
+    async def api_materialize(request: Request):
+        """Materialize narratives into a structured context package.
+
+        Body: {
+            "narrative_ids": ["narrative:abc123", ...],
+            "include_text": true,
+            "max_articles_per_narrative": 10
+        }
+
+        Returns a provenance-preserving context package with
+        source attribution, trust scores, and chronological ordering.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return {"error": "Invalid JSON body"}
+
+        narrative_ids = body.get("narrative_ids", [])
+        if not narrative_ids:
+            return {"error": "No narrative IDs provided", "context": {}}
+
+        from ..context import materialize_context
+
+        result = materialize_context(
+            store,
+            narrative_ids,
+            include_text=body.get("include_text", True),
+            max_articles_per_narrative=int(body.get("max_articles_per_narrative", 10)),
+        )
+
+        return {"context": result}
 
     @app.get("/api/sources")
     def api_sources():

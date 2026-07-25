@@ -86,17 +86,29 @@ def _extract_og_image(html: str) -> str | None:
     return None
 
 
+_URL_FRAGMENTS = {
+    "https", "http", "www", "com", "org", "net", "html", "php", "asp",
+    "aspx", "jsp", "cgi", "xml", "json", "api", "svc", "ftp", "ssh",
+    "gov", "edu", "uk", "jp", "de", "fr", "au", "ca", "br", "in", "cn",
+}
+
 def _extract_keywords(articles: list[dict], top_n: int = 10) -> list[str]:
-    """Extract top keywords from article titles and text."""
+    """Extract top keywords from article titles and text.
+
+    Strips URLs, filters out URL fragments and short technical terms,
+    and prefers meaningful content words for SearXNG queries.
+    """
     import re
-    
+
     word_counts = Counter()
     for art in articles:
         text = f"{art.get('title', '')} {art.get('text', '')}"
-        # Split on non-alphanumeric, lowercase
+        text = re.sub(r"https?://\S+", " ", text)
+        text = re.sub(r"www\.\S+", " ", text)
+        text = re.sub(r"\b\w{1,2}\b", " ", text)
         words = re.findall(r"[a-zA-Z]{3,}", text.lower())
         for w in words:
-            if w not in _STOPWORDS:
+            if w not in _STOPWORDS and w not in _URL_FRAGMENTS:
                 word_counts[w] += 1
     return [w for w, _ in word_counts.most_common(top_n)]
 
@@ -224,7 +236,25 @@ class Crawler:
         url = article.get("url")
         if url and self._already(url):
             return False
-        if not article.get("text") or len(article["text"].strip()) < 40:
+
+        text = article.get("text") or ""
+        # If text is short and we have a URL, try trafilatura to get the full article
+        if text.strip() and len(text.strip()) < 200 and url:
+            try:
+                full = self.fetch_page(url)
+                if full and full.get("text") and len(full["text"].strip()) > len(text.strip()):
+                    article["text"] = full["text"]
+                    text = article["text"]
+                    if full.get("title"):
+                        article["title"] = full["title"]
+                    if full.get("image_url"):
+                        article["image_url"] = full["image_url"]
+                    if full.get("published"):
+                        article["published"] = full["published"]
+            except Exception:
+                pass
+
+        if not text.strip() or len(text.strip()) < 40:
             if url:
                 self._mark(url)
             return False

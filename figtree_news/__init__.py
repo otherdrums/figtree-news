@@ -2,7 +2,7 @@
 
 from .config import SourceConfig, SourceRegistry
 from . import ingest, trust, query, export, eval
-from . import crawler, lineage, pipeline, summarize_news
+from . import crawler, lineage, pipeline, summarize_news, associations, intersection, context
 from .web import serve as web
 
 __all__ = [
@@ -17,5 +17,8 @@ __all__ = [
     "lineage",
     "pipeline",
     "summarize_news",
+    "associations",
+    "intersection",
+    "context",
     "web",
 ]

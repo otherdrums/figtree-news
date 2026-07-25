@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
+import threading
 import time
 from difflib import SequenceMatcher
 from typing import Any
@@ -80,6 +81,7 @@ class SearchIndex:
     def __init__(self, db_path: str = "demo/news_fts.db"):
         self.db_path = db_path
         self._con: sqlite3.Connection | None = None
+        self._lock = threading.Lock()
 
     def _conn(self) -> sqlite3.Connection:
         if self._con is None:
@@ -105,17 +107,18 @@ class SearchIndex:
         first_seen: str = "",
     ) -> None:
         """Add or replace an article in the FTS index (idempotent on article_id)."""
-        con = self._conn()
-        pub = _parse_search_date(published) or published or ""
-        seen = first_seen or _now_iso()
-        # Delete old row then insert (FTS5 has no upsert)
-        con.execute("DELETE FROM articles_fts WHERE article_id = ?", (article_id,))
-        con.execute(
-            "INSERT INTO articles_fts(article_id, title, text, author, source_id, published, first_seen) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (article_id, title, text[:3000], author, source_id, pub, seen),
-        )
-        con.commit()
+        with self._lock:
+            con = self._conn()
+            pub = _parse_search_date(published) or published or ""
+            seen = first_seen or _now_iso()
+            # Delete old row then insert (FTS5 has no upsert)
+            con.execute("DELETE FROM articles_fts WHERE article_id = ?", (article_id,))
+            con.execute(
+                "INSERT INTO articles_fts(article_id, title, text, author, source_id, published, first_seen) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (article_id, title, text[:3000], author, source_id, pub, seen),
+            )
+            con.commit()
 
     def search(
         self,
@@ -126,119 +129,122 @@ class SearchIndex:
         limit: int = 20,
     ) -> dict[str, Any]:
         """Search articles by text + date range. Returns paginated results."""
-        con = self._conn()
-        where_clause, where_param = _range_clause(range)
+        with self._lock:
+            con = self._conn()
+            where_clause, where_param = _range_clause(range)
 
-        results: list[str] = []
-        total = 0
+            results: list[str] = []
+            total = 0
 
-        if q.strip():
-            # FTS5 MATCH with BM25 ranking
-            query = " OR ".join(f'"{t}"' for t in q.split() if len(t) > 1) or q
-            try:
+            if q.strip():
+                # FTS5 MATCH with BM25 ranking
+                query = " OR ".join(f'"{t}"' for t in q.split() if len(t) > 1) or q
+                try:
+                    if where_param is not None:
+                        if isinstance(where_param, tuple):
+                            rows = con.execute(
+                                f"SELECT article_id, rank FROM articles_fts WHERE articles_fts MATCH ? "
+                                f"AND {where_clause} ORDER BY rank LIMIT ? OFFSET ?",
+                                (query, *where_param, limit, (page - 1) * limit),
+                            ).fetchall()
+                            count_row = con.execute(
+                                f"SELECT COUNT(*) FROM articles_fts WHERE articles_fts MATCH ? AND {where_clause}",
+                                (query, *where_param),
+                            ).fetchone()
+                        else:
+                            rows = con.execute(
+                                f"SELECT article_id, rank FROM articles_fts WHERE articles_fts MATCH ? "
+                                f"AND {where_clause} ORDER BY rank LIMIT ? OFFSET ?",
+                                (query, where_param, limit, (page - 1) * limit),
+                            ).fetchall()
+                            count_row = con.execute(
+                                f"SELECT COUNT(*) FROM articles_fts WHERE articles_fts MATCH ? AND {where_clause}",
+                                (query, where_param),
+                            ).fetchone()
+                    else:
+                        rows = con.execute(
+                            "SELECT article_id, rank FROM articles_fts WHERE articles_fts MATCH ? "
+                            "ORDER BY rank LIMIT ? OFFSET ?",
+                            (query, limit, (page - 1) * limit),
+                        ).fetchall()
+                        count_row = con.execute(
+                            "SELECT COUNT(*) FROM articles_fts WHERE articles_fts MATCH ?",
+                            (query,),
+                        ).fetchone()
+                    results = [r[0] for r in rows]
+                    total = count_row[0] if count_row else 0
+                except sqlite3.OperationalError:
+                    # FTS5 query syntax error — fall back to no results
+                    results = []
+                    total = 0
+            else:
+                # No query text — date-filtered browse
                 if where_param is not None:
                     if isinstance(where_param, tuple):
                         rows = con.execute(
-                            f"SELECT article_id, rank FROM articles_fts WHERE articles_fts MATCH ? "
-                            f"AND {where_clause} ORDER BY rank LIMIT ? OFFSET ?",
-                            (query, *where_param, limit, (page - 1) * limit),
+                            f"SELECT article_id FROM articles_fts WHERE {where_clause} "
+                            f"ORDER BY published DESC LIMIT ? OFFSET ?",
+                            (*where_param, limit, (page - 1) * limit),
                         ).fetchall()
                         count_row = con.execute(
-                            f"SELECT COUNT(*) FROM articles_fts WHERE articles_fts MATCH ? AND {where_clause}",
-                            (query, *where_param),
+                            f"SELECT COUNT(*) FROM articles_fts WHERE {where_clause}",
+                            where_param,
                         ).fetchone()
                     else:
                         rows = con.execute(
-                            f"SELECT article_id, rank FROM articles_fts WHERE articles_fts MATCH ? "
-                            f"AND {where_clause} ORDER BY rank LIMIT ? OFFSET ?",
-                            (query, where_param, limit, (page - 1) * limit),
+                            f"SELECT article_id FROM articles_fts WHERE {where_clause} "
+                            f"ORDER BY published DESC LIMIT ? OFFSET ?",
+                            (where_param, limit, (page - 1) * limit),
                         ).fetchall()
                         count_row = con.execute(
-                            f"SELECT COUNT(*) FROM articles_fts WHERE articles_fts MATCH ? AND {where_clause}",
-                            (query, where_param),
+                            f"SELECT COUNT(*) FROM articles_fts WHERE {where_clause}",
+                            (where_param,),
                         ).fetchone()
                 else:
                     rows = con.execute(
-                        "SELECT article_id, rank FROM articles_fts WHERE articles_fts MATCH ? "
-                        "ORDER BY rank LIMIT ? OFFSET ?",
-                        (query, limit, (page - 1) * limit),
+                        "SELECT article_id FROM articles_fts ORDER BY published DESC LIMIT ? OFFSET ?",
+                        (limit, (page - 1) * limit),
                     ).fetchall()
-                    count_row = con.execute(
-                        "SELECT COUNT(*) FROM articles_fts WHERE articles_fts MATCH ?",
-                        (query,),
-                    ).fetchone()
+                    count_row = con.execute("SELECT COUNT(*) FROM articles_fts").fetchone()
                 results = [r[0] for r in rows]
                 total = count_row[0] if count_row else 0
-            except sqlite3.OperationalError:
-                # FTS5 query syntax error — fall back to no results
-                results = []
-                total = 0
-        else:
-            # No query text — date-filtered browse
-            if where_param is not None:
-                if isinstance(where_param, tuple):
-                    rows = con.execute(
-                        f"SELECT article_id FROM articles_fts WHERE {where_clause} "
-                        f"ORDER BY published DESC LIMIT ? OFFSET ?",
-                        (*where_param, limit, (page - 1) * limit),
-                    ).fetchall()
-                    count_row = con.execute(
-                        f"SELECT COUNT(*) FROM articles_fts WHERE {where_clause}",
-                        where_param,
-                    ).fetchone()
-                else:
-                    rows = con.execute(
-                        f"SELECT article_id FROM articles_fts WHERE {where_clause} "
-                        f"ORDER BY published DESC LIMIT ? OFFSET ?",
-                        (where_param, limit, (page - 1) * limit),
-                    ).fetchall()
-                    count_row = con.execute(
-                        f"SELECT COUNT(*) FROM articles_fts WHERE {where_clause}",
-                        (where_param,),
-                    ).fetchone()
-            else:
-                rows = con.execute(
-                    "SELECT article_id FROM articles_fts ORDER BY published DESC LIMIT ? OFFSET ?",
-                    (limit, (page - 1) * limit),
-                ).fetchall()
-                count_row = con.execute("SELECT COUNT(*) FROM articles_fts").fetchone()
-            results = [r[0] for r in rows]
-            total = count_row[0] if count_row else 0
 
-        return {
-            "article_ids": results,
-            "total": total,
-            "page": page,
-            "total_pages": max(1, math.ceil(total / limit)) if total else 0,
-        }
+            return {
+                "article_ids": results,
+                "total": total,
+                "page": page,
+                "total_pages": max(1, math.ceil(total / limit)) if total else 0,
+            }
 
     def title_exists(self, title: str, source_id: str, threshold: float = 0.85) -> bool:
         """Check if a similar title from the same source already exists."""
         if not title:
             return False
         title_lower = title.lower().strip()
-        con = self._conn()
-        try:
-            rows = con.execute(
-                "SELECT title FROM articles_fts WHERE source_id = ? LIMIT 50",
-                (source_id,),
-            ).fetchall()
-        except sqlite3.OperationalError:
-            return False
-        for (existing,) in rows:
-            if not existing:
-                continue
-            ratio = SequenceMatcher(None, title_lower, existing.lower().strip()).ratio()
-            if ratio >= threshold:
-                return True
+        with self._lock:
+            con = self._conn()
+            try:
+                rows = con.execute(
+                    "SELECT title FROM articles_fts WHERE source_id = ? LIMIT 50",
+                    (source_id,),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return False
+            for (existing,) in rows:
+                if not existing:
+                    continue
+                ratio = SequenceMatcher(None, title_lower, existing.lower().strip()).ratio()
+                if ratio >= threshold:
+                    return True
         return False
 
     def article_count(self) -> int:
-        try:
-            row = self._conn().execute("SELECT COUNT(*) FROM articles_fts").fetchone()
-            return row[0] if row else 0
-        except sqlite3.OperationalError:
-            return 0
+        with self._lock:
+            try:
+                row = self._conn().execute("SELECT COUNT(*) FROM articles_fts").fetchone()
+                return row[0] if row else 0
+            except sqlite3.OperationalError:
+                return 0
 
 
 _index: SearchIndex | None = None

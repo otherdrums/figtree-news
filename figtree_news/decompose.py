@@ -7,11 +7,14 @@ enabling structured search and natural narrative emergence through figment reuse
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import numpy as np
 import re
 
 from figtree import Figment, FigmentStore
 
+from .associations import assert_association, _boundary_sim, _string_overlap
 from .llm_config import LLMConfig
 
 ROLES = ['who', 'what', 'where', 'when', 'why', 'how']
@@ -49,11 +52,13 @@ class DecompositionEngine:
         self._running = False
         self._workers: list[asyncio.Task] = []
         self.num_workers = num_workers  # Number of parallel workers
+        self._queued: set[str] = set()  # Track queued article IDs to prevent duplicates
     
     def start(self):
         """Start background decomposition workers."""
         if not self._running:
             self._running = True
+            self._queued.clear()
             # Start multiple workers for parallel processing
             for i in range(self.num_workers):
                 worker = asyncio.create_task(self._worker_loop(worker_id=i))
@@ -95,13 +100,17 @@ class DecompositionEngine:
     def stop(self):
         """Stop background decomposition workers."""
         self._running = False
+        self._queued.clear()
         for worker in self._workers:
             worker.cancel()
         self._workers.clear()
         print("[decompose] All background workers stopped")
     
     async def queue_article(self, article_id: str):
-        """Queue an article for decomposition."""
+        """Queue an article for decomposition (deduplicates by article_id)."""
+        if article_id in self._queued:
+            return
+        self._queued.add(article_id)
         await self.queue.put(article_id)
     
     async def _worker_loop(self, worker_id: int = 0):
@@ -120,8 +129,9 @@ class DecompositionEngine:
                 # Get next item from queue (blocks until available)
                 article_id = await self.queue.get()
                 print(f"[decompose-{worker_id}] Picked up article {article_id[:8]}, queue={self.queue.qsize()}")
-                
+
                 await self._decompose_article(article_id, client)
+                self._queued.discard(article_id)
                 processed_count += 1
                 
                 # Small yield to not monopolize event loop
@@ -133,6 +143,7 @@ class DecompositionEngine:
                     print(f"[decompose-{worker_id}] Progress: {processed_count} processed, {queue_size} remaining")
                     
             except asyncio.CancelledError:
+                self._queued.discard(article_id)
                 print(f"[decompose-{worker_id}] Worker cancelled after processing {processed_count} articles")
                 break
             except Exception as exc:
@@ -320,7 +331,40 @@ class DecompositionEngine:
         )
         
         self.store.upsert([figment], hidden_size=boundary.shape[0])
+        self._try_auto_associate(figment)
         return figment
+
+    async def _try_auto_associate(self, figment: Figment) -> None:
+        """Propose associations between a new role figment and existing variants."""
+        role = figment.meta.get("role", "")
+        if not role:
+            return
+        try:
+            all_figs = self.store.all()
+            same_role = [f for f in all_figs if f.meta.get("role") == role and f.figment_id != figment.figment_id]
+            if not same_role:
+                return
+            from .associations import _editsim, _already_associated, propose_associations
+            proposals = propose_associations(
+                self.store,
+                role_figments=[figment] + same_role,
+                boundary_threshold=0.90,
+                string_overlap_threshold=0.50,
+                editsim_threshold=0.85,
+                min_co_occurrence=0,
+            )
+            for p in proposals:
+                if p["figment_a_id"] == figment.figment_id or p["figment_b_id"] == figment.figment_id:
+                    assert_association(
+                        self.store,
+                        p["figment_a_id"],
+                        p["figment_b_id"],
+                        confidence=p["confidence"],
+                        evidence="auto_decompose",
+                        hidden_size=figment.boundary.shape[0],
+                    )
+        except Exception:
+            pass
     
     def _normalize_text(self, text: str) -> str:
         """Normalize text for deduplication."""
