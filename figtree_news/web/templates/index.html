@@ -38,8 +38,41 @@
       Newest coverage first
     </h2>
 
+    <!-- Sort/Filter Bar -->
+    <div class="sort-filter-bar">
+      <div class="sort-group">
+        <label for="sort-by" class="sort-label">Sort:</label>
+        <select id="sort-by" onchange="applySortAndFilter()">
+          <option value="newest" selected>Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="sources-desc">Most sources</option>
+          <option value="sources-asc">Fewest sources</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="filter-source" class="filter-label">Source:</label>
+        <select id="filter-source" onchange="applySortAndFilter()">
+          <option value="">All sources</option>
+          {% for sid, logo in source_logos.items() %}
+          <option value="{{ sid }}">{{ sid }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="filter-date-range" class="filter-label">Date range:</label>
+        <select id="filter-date-range" onchange="applySortAndFilter()">
+          <option value="">All time</option>
+          <option value="today">Today</option>
+          <option value="yesterday">Yesterday</option>
+          <option value="last_week">Last week</option>
+          <option value="last_month">Last month</option>
+          <option value="last_year">Last year</option>
+        </select>
+      </div>
+    </div>
+
     {% if narratives %}
-    <div class="narrative-grid">
+    <div class="narrative-grid" id="narrative-grid">
       {% for n in narratives %}
       <article class="narrative-card">
         {% set lead_video = '' %}
@@ -86,17 +119,33 @@
         </div>
 
         <div class="source-versions">
+          {% set source_counts = {} %}
+          {% for member_id in n.members %}
+            {% set article = by_id.get(member_id) %}
+            {% if article %}
+              {% set sid = article.meta.get('source_id', '') %}
+              {% set source_counts = source_counts.update({sid: source_counts.get(sid, 0) + 1}) %}
+            {% endif %}
+          {% endfor %}
           {% for member_id in n.members %}
             {% set article = by_id.get(member_id) %}
             {% if article %}
             <div class="source-version" data-source="{{ article.meta.get('source_id', '') }}">
               <div class="version-header">
-                <a href="/source/{{ article.meta.get('source_id') }}" class="source-badge">
-                  {% set sid = article.meta.get('source_id', '') %}
+                {% set sid = article.meta.get('source_id', '') %}
+                {% set count = source_counts.get(sid, 0) %}
+                {% if count > 1 %}
+                <a href="/narrative/{{ n.narrative_id }}?source={{ sid }}" class="source-badge">
+                {% else %}
+                <a href="/source/{{ sid }}" class="source-badge">
+                {% endif %}
                   {% if source_logos.get(sid) %}
                   <img src="{{ source_logos[sid] }}" class="source-logo-inline" alt="" loading="lazy" onerror="this.style.display='none'">
                   {% endif %}
                   {{ sid }}
+                  {% if count > 1 %}
+                  <span class="article-count-badge">×{{ count }}</span>
+                  {% endif %}
                 </a>
                 {% if article.meta.get('published') %}
                 <time class="published-date" datetime="{{ article.meta.get('published') }}">{{ article.meta.get('published')[:16] if article.meta.get('published') else '' }}</time>
@@ -105,19 +154,6 @@
               <h4 class="version-headline">
                 <a href="/article/{{ article.figment_id }}">{{ article.meta.get('title') or article.text[:100] }}</a>
               </h4>
-              {% if article.meta.get('author') %}
-              <p class="version-author">by {{ article.meta.get('author') }}</p>
-              {% endif %}
-              <p class="version-lead">{{ article.meta.get('summary') or article.text[:180] }}{% if article.text | length > 180 %}...{% endif %}</p>
-              {% if article.meta.get('video_url') %}
-              <div class="version-video">
-                <iframe src="{{ article.meta.get('video_url') }}" frameborder="0" allowfullscreen loading="lazy"></iframe>
-              </div>
-              {% elif article.meta.get('image_url') %}
-              <div class="version-thumb">
-                <img src="{{ article.meta.get('image_url') }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
-              </div>
-              {% endif %}
               <div class="narrative-actions">
                 <a href="/article/{{ article.figment_id }}" class="read-more">Read article &rarr;</a>
                 <button class="btn btn-sm btn-find"
@@ -136,6 +172,32 @@
     <p class="muted">No stories yet. Run the crawler to ingest articles.</p>
     {% endif %}
   </section>
+
+  <!-- Narrative sorting JS -->
+  <script>
+  function applySort() {
+    var select = document.getElementById('sort-by');
+    var sortBy = select.value;
+    var grid = document.getElementById('narrative-grid');
+    if (!grid) return;
+    var cards = Array.from(grid.querySelectorAll('.narrative-card'));
+    
+    cards.sort(function(a, b) {
+      var dateA = a.querySelector('.narrative-date') ? new Date(a.querySelector('.narrative-date').textContent) : new Date(0);
+      var dateB = b.querySelector('.narrative-date') ? new Date(b.querySelector('.narrative-date').textContent) : new Date(0);
+      var sourcesA = parseInt(a.querySelector('.source-count')?.textContent) || 0;
+      var sourcesB = parseInt(b.querySelector('.source-count')?.textContent) || 0;
+      
+      if (sortBy === 'newest') return dateB - dateA;
+      if (sortBy === 'oldest') return dateA - dateB;
+      if (sortBy === 'sources-desc') return sourcesB - sourcesA;
+      if (sortBy === 'sources-asc') return sourcesA - sourcesB;
+      return 0;
+    });
+    
+    cards.forEach(function(card) { grid.appendChild(card); });
+  }
+  </script>
 
   {% for role_name, role_label in [('who','Who'),('what','What'),('where','Where'),('why','Why'),('how','How')] %}
   <section id="tab-{{ role_name }}" class="tab-panel" style="display:none;">

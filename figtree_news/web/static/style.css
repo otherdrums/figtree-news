@@ -256,7 +256,7 @@ section h2 {
 }
 
 .content .container {
-  overflow-x: auto;
+
 }
 
 th {
@@ -317,8 +317,8 @@ pre {
   font-size: 0.85rem;
   line-height: 1.6;
   margin: 0;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+
+
   border: none;
   position: relative;
 }
@@ -613,7 +613,6 @@ code {
   grid-template-columns: repeat(auto-fit, minmax(280px, 400px));
   gap: 1rem;
   padding: 1.5rem;
-  justify-content: center;
 }
 
 .source-version {
@@ -1235,7 +1234,7 @@ code {
 
 .slide-panel-body {
   padding: 1.5rem;
-  overflow-x: auto;  /* horizontal scroll for long feed URLs */
+  /* horizontal scroll for long feed URLs */
 }
 
 /* Sticky crawl action bar */
@@ -1398,8 +1397,8 @@ code {
   gap: 0;
   border-bottom: 2px solid var(--border);
   margin-bottom: 1rem;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+
+
 }
 
 .tab-btn {
@@ -1456,6 +1455,54 @@ code {
   font-size: 0.8rem;
   color: var(--text-muted);
   margin-left: 0.5rem;
+}
+
+/* ---- Sort/Filter Bar ---- */
+.sort-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.sort-group,
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sort-label,
+.filter-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sort-filter-bar select {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+/* Article count badge for sources with multiple articles */
+.article-count-badge {
+  background: var(--accent-blue);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.35rem;
+  border-radius: 10px;
+  margin-left: 0.25rem;
+  vertical-align: middle;
 }
 
 /* ---- Story Date ---- */
