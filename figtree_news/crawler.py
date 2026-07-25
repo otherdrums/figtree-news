@@ -37,7 +37,11 @@ _STOPWORDS = {
 }
 
 
-USER_AGENT = "figtree-news/0.1 (+https://github.com/otherdrums/figtree-news; research crawler)"
+_USER_AGENT = "figtree-news/0.1 (+https://github.com/otherdrums/figtree-news; research crawler)"
+
+_BLOCKED_DOMAINS = {
+    "msn.com", "msn.co.uk", "msn.es", "msn.fr", "msn.it", "msn.de",
+}
 
 
 def _domain(url: str) -> str:
@@ -67,7 +71,7 @@ def _can_fetch(url: str) -> bool:
     if not netloc:
         return False
     try:
-        return _robot_parser(netloc).can_fetch(USER_AGENT, url)
+        return _robot_parser(netloc).can_fetch(_USER_AGENT, url)
     except Exception:
         return True
 
@@ -93,24 +97,39 @@ _URL_FRAGMENTS = {
 }
 
 def _extract_keywords(articles: list[dict], top_n: int = 10) -> list[str]:
-    """Extract top keywords from article titles and text.
+    """Extract meaningful multi-word phrases from article titles for SearXNG queries.
 
-    Strips URLs, filters out URL fragments and short technical terms,
-    and prefers meaningful content words for SearXNG queries.
+    Builds frequency-weighted bigrams and trigrams from titles,
+    filtering out generic/stopword pairs so queries are specific
+    enough to return targeted news results.
     """
     import re
+    from itertools import combinations
 
-    word_counts = Counter()
+    phrase_counts = Counter()
     for art in articles:
-        text = f"{art.get('title', '')} {art.get('text', '')}"
-        text = re.sub(r"https?://\S+", " ", text)
-        text = re.sub(r"www\.\S+", " ", text)
-        text = re.sub(r"\b\w{1,2}\b", " ", text)
-        words = re.findall(r"[a-zA-Z]{3,}", text.lower())
-        for w in words:
-            if w not in _STOPWORDS and w not in _URL_FRAGMENTS:
-                word_counts[w] += 1
-    return [w for w, _ in word_counts.most_common(top_n)]
+        title = art.get("title", "")
+        if not title:
+            continue
+        words = re.findall(r"[a-zA-Z]{3,}", title.lower())
+        words = [w for w in words if w not in _STOPWORDS and w not in _URL_FRAGMENTS]
+        # Build bigrams and trigrams from remaining meaningful words
+        for n in (2, 3):
+            for i in range(len(words) - n + 1):
+                phrase = " ".join(words[i:i + n])
+                if any(w in _STOPWORDS for w in words[i:i + n]):
+                    continue
+                phrase_counts[phrase] += 1
+
+    if not phrase_counts:
+        return [
+            "breaking news",
+            "world news today",
+            "technology news",
+            "business markets",
+            "politics government",
+        ]
+    return [p for p, _ in phrase_counts.most_common(top_n)]
 
 
 class Crawler:
@@ -185,7 +204,7 @@ class Crawler:
         """Extract article text, metadata and same-domain links from a URL."""
         try:
             resp = httpx.get(
-                url, headers={"User-Agent": USER_AGENT}, follow_redirects=True, timeout=20
+                url, headers={"User-Agent": _USER_AGENT}, follow_redirects=True, timeout=20
             )
             html = resp.text
         except Exception as exc:  # pragma: no cover
@@ -237,6 +256,12 @@ class Crawler:
         if url and self._already(url):
             return False
 
+        url_domain = (url.split("/")[2] if url else "")
+        if any(d in url_domain for d in _BLOCKED_DOMAINS):
+            if url:
+                self._mark(url)
+            return False
+
         text = article.get("text") or ""
         # If text is short and we have a URL, try trafilatura to get the full article
         if text.strip() and len(text.strip()) < 200 and url:
@@ -266,10 +291,17 @@ class Crawler:
                 self._mark(url)
             return False
 
+        # VRAM guard: refuse new ingestion if GPU memory is critically low
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+            if free_mb < 300:
+                if url:
+                    self._mark(url)
+                return False
+
         with self._model_lock:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
             ingest_articles(
                 self.model,
                 self.tokenizer,
@@ -407,8 +439,11 @@ class Crawler:
             sid = article.get("source_id", "")
             if sid:
                 self.registry.ensure(sid, name=sid, base_trust=0.7)
-            # Fetch full article text via trafilatura (replaces snippet)
             url = article["url"]
+            url_domain = (url.split("/")[2] if url else "")
+            if any(d in url_domain for d in _BLOCKED_DOMAINS):
+                continue
+            # Fetch full article text via trafilatura (replaces snippet)
             full = self.fetch_page(url)
             if full and full.get("text") and len(full["text"].strip()) >= 40:
                 article["text"] = full["text"]
