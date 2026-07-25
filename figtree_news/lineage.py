@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -57,19 +57,24 @@ _STOP = {
 def _entities(text: str) -> set[str]:
     if not text:
         return set()
-    toks = {t.strip(".") for t in _ENTITY_RE.findall(text)}
+    # More permissive: capture any capitalized word sequence, including hyphenated
+    toks = {t.strip(".") for t in re.findall(r"\b([A-Z][a-z]+(?:[\s-][A-Z][a-z]+)*)\b", text)}
     result = set()
     for t in toks:
         if len(t) < 3:
             continue
         # Only filter single-word entities against stop list
-        if " " not in t and t in _STOP:
+        if " " not in t and "-" not in t and t in _STOP:
             continue
         result.add(t)
         # For multi-word entities, also add individual words as entities
         # This helps match "Saudi Arabia" with "Saudi" across different headlines
         if " " in t:
             for word in t.split():
+                if len(word) >= 3 and word not in _STOP:
+                    result.add(word)
+        if "-" in t:
+            for word in t.split("-"):
                 if len(word) >= 3 and word not in _STOP:
                     result.add(word)
     return result
@@ -122,13 +127,12 @@ def _articles(store: FigmentStore, *, all_figs: list | None = None) -> list[Figm
     ]
 
 
-def _cluster(articles: list[Figment], min_shared: int = 2, min_jaccard: float = 0.30) -> list[list[Figment]]:
+def _cluster(articles: list[Figment], min_shared: int = 2, min_jaccard: float = 0.25) -> list[list[Figment]]:
     """Group articles by entity overlap using inverted index.
     
     Uses a combined check: articles must share >= min_shared entities AND
-    have >= min_jaccard Jaccard similarity. This prevents mega-clusters from
-    single shared generic terms (Jaccard requirement) while allowing articles
-    with very similar entity sets to cluster even if small (shared count).
+    have >= min_jaccard Jaccard similarity. Higher thresholds prevent
+    over-merging distinct stories that share common entities (e.g., "Trump", "Biden").
     
     Uses an inverted index for O(n * avg_entities) instead of O(n²).
     """
@@ -270,6 +274,15 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
         # Find the latest article date in this narrative
         latest_time = max((ft[1] for ft in times if ft[1]), default=None)
         latest_iso = latest_time.isoformat() if latest_time else ""
+        
+        # Count articles from last 24 hours for "new" indicator
+        now_utc = datetime.now(timezone.utc)
+        day_ago = now_utc - timedelta(days=1)
+        new_count = sum(1 for ft in times if ft[1] and ft[1] >= day_ago)
+        
+        # first_seen is when this narrative was first created (now, since we recompute each pipeline run)
+        # In a persistent system, this would be the original creation time
+        first_seen_iso = now_utc.isoformat()
 
         narrative = Figment.create(
             text=narrative_text,
@@ -291,6 +304,9 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
                     if frame_shift else ""
                 ),
                 "latest_article_date": latest_iso,
+                "first_seen": first_seen_iso,
+                "last_updated": latest_iso,
+                "new_article_count": new_count,
             },
             figment_id=narrative_id,
         )
@@ -304,6 +320,9 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
                 "first_reporter_url": first.meta.get("url"),
                 "size": len(group),
                 "latest_article_date": latest_iso,
+                "first_seen": first_seen_iso,
+                "last_updated": latest_iso,
+                "new_article_count": new_count,
             }
         )
 
@@ -340,6 +359,9 @@ def get_narratives(store: FigmentStore, *, all_figs: list | None = None) -> list
                     "frame_shift_score": f.meta.get("frame_shift_score"),
                     "frame_shift_note": f.meta.get("frame_shift_note", ""),
                     "latest_article_date": f.meta.get("latest_article_date", ""),
+                    "first_seen": f.meta.get("first_seen", ""),
+                    "last_updated": f.meta.get("last_updated", ""),
+                    "new_article_count": f.meta.get("new_article_count", 0),
                 }
             )
     return out

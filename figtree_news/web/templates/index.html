@@ -69,105 +69,88 @@
           <option value="last_year">Last year</option>
         </select>
       </div>
+      <div class="filter-group">
+        <label for="filter-min-sources" class="filter-label">Min sources:</label>
+        <select id="filter-min-sources" onchange="applySortAndFilter()">
+          <option value="">Any</option>
+          <option value="2">2+</option>
+          <option value="3">3+</option>
+          <option value="4">4+</option>
+          <option value="5">5+</option>
+        </select>
+      </div>
     </div>
 
     {% if narratives %}
     <div class="narrative-grid" id="narrative-grid">
       {% for n in narratives %}
       <article class="narrative-card">
-        {% set lead_video = '' %}
-        {% set lead_img = '' %}
-        {% for member_id in n.members %}
-          {% set article = by_id.get(member_id) %}
-          {% if article %}
-            {% if article.meta.get('video_url') and not lead_video %}
-              {% set lead_video = article.meta.get('video_url') %}
-            {% elif article.meta.get('image_url') and not lead_img %}
-              {% set lead_img = article.meta.get('image_url') %}
-            {% endif %}
-          {% endif %}
-        {% endfor %}
-        {% if lead_video %}
-        <div class="narrative-video">
-          <iframe src="{{ lead_video }}" frameborder="0" allowfullscreen loading="lazy"></iframe>
-        </div>
-        {% elif lead_img %}
-        <div class="narrative-image">
-          <img src="{{ lead_img }}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
-        </div>
-        {% endif %}
         <div class="narrative-header">
-          <h3 class="narrative-title">
-            <a href="/narrative/{{ n.narrative_id }}">
-              {{ n.title or n.text[:80] }}
-            </a>
-          </h3>
-          <div class="narrative-meta">
-            <span class="source-count">{{ n.sources | length }} source{{ 's' if n.sources | length != 1 }}</span>
-            {% if n.frame_shift %}
-            <a href="/narrative/{{ n.narrative_id }}#frame-shift" class="shift-badge" title="{{ n.frame_shift_note }}">
-              frame shift{% if n.frame_shift_score is not none %} ({{ "%.2f"|format(n.frame_shift_score) }}){% endif %}
-            </a>
+          <!-- Line 1: Date + Title -->
+          <div class="narrative-top-line">
+            {% if n.latest_article_date %}
+            <time class="narrative-date" datetime="{{ n.latest_article_date }}">{{ n.latest_article_date[:10] }}</time>
             {% endif %}
-            <span class="first-reporter">
-              First: <a href="/source/{{ n.first_reporter }}">{{ n.first_reporter }}</a>
-            </span>
+            <h3 class="narrative-title">
+              <a href="/narrative/{{ n.narrative_id }}">
+                {{ n.title or n.text[:80] }}
+              </a>
+            </h3>
           </div>
-          {% if n.latest_article_date %}
-          <span class="narrative-date">{{ n.latest_article_date[:10] }}</span>
-          {% endif %}
-        </div>
 
-        <div class="source-versions">
-          {% set source_counts = {} %}
-          {% for member_id in n.members %}
-            {% set article = by_id.get(member_id) %}
-            {% if article %}
-              {% set sid = article.meta.get('source_id', '') %}
-              {% set source_counts = source_counts.update({sid: source_counts.get(sid, 0) + 1}) %}
-            {% endif %}
-          {% endfor %}
-          {% for member_id in n.members %}
-            {% set article = by_id.get(member_id) %}
-            {% if article %}
-            <div class="source-version" data-source="{{ article.meta.get('source_id', '') }}">
-              <div class="version-header">
+          <!-- Line 2: Source badges -->
+          <div class="source-badges">
+            {% set source_counts = {} %}
+            {% for member_id in n.members %}
+              {% set article = by_id.get(member_id) %}
+              {% if article %}
                 {% set sid = article.meta.get('source_id', '') %}
-                {% set count = source_counts.get(sid, 0) %}
+                {% set source_counts = source_counts.update({sid: source_counts.get(sid, 0) + 1}) %}
+              {% endif %}
+            {% endfor %}
+            {% for sid in n.sources %}
+              {% set count = source_counts.get(sid, 0) %}
+              {% set is_first = (sid == n.first_reporter) %}
+              <a href="/narrative/{{ n.narrative_id }}?source={{ sid }}" class="source-badge {% if is_first %}first-reporter{% endif %}" {% if is_first %}title="Broke this story"{% endif %}>
+                {% if source_logos.get(sid) %}
+                <img src="{{ source_logos[sid] }}" class="source-logo-inline" alt="" loading="lazy" onerror="this.style.display='none'">
+                {% endif %}
+                {% if is_first %}
+                <span class="broke-by-label">broke by</span>
+                {% endif %}
+                {{ sid }}
                 {% if count > 1 %}
-                <a href="/narrative/{{ n.narrative_id }}?source={{ sid }}" class="source-badge">
-                {% else %}
-                <a href="/source/{{ sid }}" class="source-badge">
+                <span class="article-count-badge">×{{ count }}</span>
                 {% endif %}
-                  {% if source_logos.get(sid) %}
-                  <img src="{{ source_logos[sid] }}" class="source-logo-inline" alt="" loading="lazy" onerror="this.style.display='none'">
-                  {% endif %}
-                  {{ sid }}
-                  {% if count > 1 %}
-                  <span class="article-count-badge">×{{ count }}</span>
-                  {% endif %}
-                </a>
-                {% if article.meta.get('published') %}
-                <time class="published-date" datetime="{{ article.meta.get('published') }}">{{ article.meta.get('published')[:16] if article.meta.get('published') else '' }}</time>
-                {% endif %}
-              </div>
-              <h4 class="version-headline">
-                <a href="/article/{{ article.figment_id }}">{{ article.meta.get('title') or article.text[:100] }}</a>
-              </h4>
-              <div class="narrative-actions">
-                <a href="/article/{{ article.figment_id }}" class="read-more">Read article &rarr;</a>
-                <button class="btn btn-sm btn-find"
-                  onclick="findMore('{{ n.narrative_id }}', {{ n.sources | tojson | safe }}, {{ n.entities | tojson | safe }})">
-                  Find More
-                </button>
-              </div>
-            </div>
-            {% endif %}
-          {% endfor %}
+              </a>
+            {% endfor %}
+          </div>
+
+          {% if n.frame_shift %}
+          <a href="/narrative/{{ n.narrative_id }}#frame-shift" class="shift-badge" title="{{ n.frame_shift_note }}">
+            frame shift{% if n.frame_shift_score is not none %} ({{ "%.2f"|format(n.frame_shift_score) }}){% endif %}
+          </a>
+          {% endif %}
+          <span class="source-count" data-count="{{ n.sources | length }}">{{ n.sources | length }} sources</span>
         </div>
       </article>
       {% endfor %}
     </div>
+
+    <!-- Pagination -->
+    <div class="pagination" id="pagination">
+      <button class="btn btn-secondary" id="prev-page" disabled>Previous</button>
+      <span class="page-info" id="page-info">Page 1 of 1</span>
+      <button class="btn btn-secondary" id="next-page" disabled>Next</button>
+    </div>
+
+    <!-- Pagination -->
+    <div class="pagination" id="pagination" style="display:none;">
+      <button class="pagination-btn" id="prev-page" disabled>&laquo; Previous</button>
+      <div class="pagination-pages" id="pagination-pages"></div>
+      <button class="pagination-btn" id="next-page" disabled>Next &raquo;</button>
+    </div>
+
     {% else %}
     <p class="muted">No stories yet. Run the crawler to ingest articles.</p>
     {% endif %}
@@ -175,18 +158,63 @@
 
   <!-- Narrative sorting JS -->
   <script>
-  function applySort() {
+  function applySortAndFilter() {
     var select = document.getElementById('sort-by');
     var sortBy = select.value;
     var grid = document.getElementById('narrative-grid');
     if (!grid) return;
     var cards = Array.from(grid.querySelectorAll('.narrative-card'));
     
+    // Filter by min sources
+    var minSources = parseInt(document.getElementById('filter-min-sources')?.value) || 0;
+    if (minSources > 0) {
+      cards = cards.filter(function(card) {
+        var countEl = card.querySelector('.source-count');
+        var count = countEl ? parseInt(countEl.dataset.count) : 0;
+        return count >= minSources;
+      });
+    }
+
+    // Filter by date range
+    var dateRange = document.getElementById('filter-date-range')?.value;
+    if (dateRange) {
+      var now = new Date();
+      var cutoff;
+      if (dateRange === 'today') {
+        cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      } else if (dateRange === 'yesterday') {
+        cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+      } else if (dateRange === 'last_week') {
+        cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      } else if (dateRange === 'last_month') {
+        cutoff = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+      } else if (dateRange === 'last_year') {
+        cutoff = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+      }
+      if (cutoff) {
+        cards = cards.filter(function(card) {
+          var dateEl = card.querySelector('.narrative-date');
+          if (!dateEl) return false;
+          var cardDate = new Date(dateEl.textContent);
+          return cardDate >= cutoff;
+        });
+      }
+    }
+
+    // Filter by source
+    var filterSource = document.getElementById('filter-source')?.value;
+    if (filterSource) {
+      cards = cards.filter(function(card) {
+        var badges = card.querySelectorAll('.source-badge');
+        return Array.from(badges).some(function(b) { return b.textContent.includes(filterSource); });
+      });
+    }
+    
     cards.sort(function(a, b) {
       var dateA = a.querySelector('.narrative-date') ? new Date(a.querySelector('.narrative-date').textContent) : new Date(0);
       var dateB = b.querySelector('.narrative-date') ? new Date(b.querySelector('.narrative-date').textContent) : new Date(0);
-      var sourcesA = parseInt(a.querySelector('.source-count')?.textContent) || 0;
-      var sourcesB = parseInt(b.querySelector('.source-count')?.textContent) || 0;
+      var sourcesA = parseInt(a.querySelector('.source-count')?.dataset?.count) || 0;
+      var sourcesB = parseInt(b.querySelector('.source-count')?.dataset?.count) || 0;
       
       if (sortBy === 'newest') return dateB - dateA;
       if (sortBy === 'oldest') return dateA - dateB;
@@ -195,7 +223,55 @@
       return 0;
     });
     
-    cards.forEach(function(card) { grid.appendChild(card); });
+    // Store filtered cards for pagination
+    var filteredCards = cards;
+    var itemsPerPage = 20;
+    var currentPage = 1;
+    
+    function renderPage() {
+      var start = (currentPage - 1) * itemsPerPage;
+      var end = start + itemsPerPage;
+      var pageCards = filteredCards.slice(start, end);
+      
+      grid.innerHTML = '';
+      pageCards.forEach(function(card) { grid.appendChild(card); });
+      
+      var totalPages = Math.ceil(filteredCards.length / itemsPerPage);
+      document.getElementById('pagination').style.display = totalPages > 1 ? 'flex' : 'none';
+      
+      var pagesContainer = document.getElementById('pagination-pages');
+      pagesContainer.innerHTML = '';
+      for (var i = 1; i <= totalPages; i++) {
+        var btn = document.createElement('button');
+        btn.className = 'pagination-btn' + (i === currentPage ? ' active' : '');
+        btn.textContent = i;
+        btn.addEventListener('click', function() {
+          currentPage = i;
+          renderPage();
+        });
+        pagesContainer.appendChild(btn);
+      }
+      
+      document.getElementById('prev-page').disabled = currentPage === 1;
+      document.getElementById('next-page').disabled = currentPage >= totalPages;
+    }
+    
+    document.getElementById('prev-page').addEventListener('click', function() {
+      if (currentPage > 1) {
+        currentPage--;
+        renderPage();
+      }
+    });
+    document.getElementById('next-page').addEventListener('click', function() {
+      var totalPages = Math.ceil(filteredCards.length / 20);
+      if (currentPage < totalPages) {
+        currentPage++;
+        renderPage();
+      }
+    });
+    
+    // Initial render
+    renderPage();
   }
   </script>
 

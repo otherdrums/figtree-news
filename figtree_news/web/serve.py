@@ -561,10 +561,33 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     @app.on_event("shutdown")
     async def shutdown_event():
         global _decompose_engine, _cogitate_engine
+        # Cancel all background tasks gracefully
         if _decompose_engine:
             _decompose_engine.stop()
+            # Wait for workers to finish cancellation
+            for worker in getattr(_decompose_engine, '_workers', []):
+                try:
+                    await asyncio.wait_for(worker, timeout=5.0)
+                except asyncio.TimeoutError:
+                    pass
         if _cogitate_engine:
             _cogitate_engine.stop()
+            if getattr(_cogitate_engine, '_task', None):
+                try:
+                    await asyncio.wait_for(_cogitate_engine._task, timeout=5.0)
+                except asyncio.TimeoutError:
+                    pass
+
+    # Signal handlers for graceful shutdown on SIGINT/SIGTERM
+    def _handle_shutdown_signal(signum, frame):
+        # Create a new event loop or use existing one to trigger shutdown
+        loop = asyncio.get_event_loop()
+        loop.call_soon_threadsafe(lambda: asyncio.create_task(shutdown_event()))
+
+    # Register signal handlers for graceful shutdown
+    import signal
+    signal.signal(signal.SIGINT, _handle_shutdown_signal)
+    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 
     def _render(request: Request, name: str, context: dict[str, Any]) -> HTMLResponse:
         template = templates.get_template(name)
@@ -680,8 +703,40 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         ]
 
     @app.get("/api/narratives")
-    def api_narratives():
-        return data()["narratives"]
+    def api_narratives(page: int = 1, per_page: int = 20, sort: str = "newest"):
+        """Get narratives with pagination and sorting."""
+        all_figs = store.all()
+        narrs = get_narratives(store, all_figs=all_figs)
+        
+        # Apply sorting
+        if sort == "newest":
+            narrs.sort(key=lambda n: n.get("first_seen", ""), reverse=True)
+        elif sort == "updated":
+            narrs.sort(key=lambda n: n.get("last_updated", ""), reverse=True)
+        elif sort == "oldest":
+            narrs.sort(key=lambda n: n.get("first_seen", ""))
+        elif sort == "sources":
+            narrs.sort(key=lambda n: len(n.get("sources", [])), reverse=True)
+        else:
+            narrs.sort(key=lambda n: n.get("latest_article_date", ""), reverse=True)
+        
+        # Pagination
+        total = len(narrs)
+        per_page = min(max(per_page, 1), 100)
+        page = max(page, 1)
+        start = (page - 1) * per_page
+        end = start + per_page
+        
+        return {
+            "narratives": narrs[start:end],
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total": total,
+                "total_pages": (total + per_page - 1) // per_page
+            },
+            "sort": sort
+        }
 
     @app.get("/api/roles")
     def api_roles(role: str = "", range: str = "all"):

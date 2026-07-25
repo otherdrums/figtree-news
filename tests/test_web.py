@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+from datetime import timedelta
 from fastapi.testclient import TestClient
 from figtree import Figment, FigmentStore, connect
 
