@@ -21,6 +21,7 @@ import sqlite3
 import threading
 import time
 from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Any
 
 
@@ -85,6 +86,7 @@ class SearchIndex:
 
     def _conn(self) -> sqlite3.Connection:
         if self._con is None:
+            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
             self._con = sqlite3.connect(self.db_path, check_same_thread=False)
             self._con.execute("PRAGMA journal_mode=WAL")
             self._con.execute(
