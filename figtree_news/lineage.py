@@ -205,10 +205,55 @@ def _extract_role_entities(articles: list[Figment], all_figs: list[Figment]) -> 
     return sorted(entities)[:12]
 
 
+def _singleton_narrative(article: Figment) -> tuple[Figment, dict[str, Any]]:
+    """Create a one-article narrative for a single article."""
+    now_utc = datetime.now(timezone.utc)
+    narrative_id = f"narrative:{article.figment_id[:12]}"
+    narrative_title = article.meta.get("title") or article.text.split(".")[0].strip()
+    narrative = Figment.create(
+        text=narrative_title,
+        boundary=article.boundary.copy(),
+        meta={
+            "edge_type": "narrative",
+            "title": narrative_title,
+            "members": [article.figment_id],
+            "sources": sorted({_normalize_source(article.meta.get("source_id"))}),
+            "first_reporter": article.figment_id,
+            "first_reporter_source": article.meta.get("source_id"),
+            "first_reporter_url": article.meta.get("url"),
+            "entities": [],
+            "frame_shift": False,
+            "frame_shift_score": None,
+            "frame_shift_note": "",
+            "latest_article_date": "",
+            "first_seen": now_utc.isoformat(),
+            "last_updated": "",
+            "new_article_count": 0,
+        },
+        figment_id=narrative_id,
+        kind="edge",
+    )
+    summary = {
+        "narrative_id": narrative_id,
+        "sources": sorted({_normalize_source(article.meta.get("source_id"))}),
+        "members": [article.figment_id],
+        "first_reporter": article.meta.get("source_id"),
+        "first_reporter_url": article.meta.get("url"),
+        "size": 1,
+        "latest_article_date": "",
+        "first_seen": now_utc.isoformat(),
+        "last_updated": "",
+        "new_article_count": 0,
+    }
+    return narrative, summary
+
+
 def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]:
     """Recompute lineage figments from the current store. Idempotent.
 
     Uses role figment clustering when available, boundary fallback otherwise.
+    If clustering or persistence fails, falls back to one narrative per article
+    so the UI always has stories to render.
     """
     all_figs = store.all()
     for f in all_figs:
@@ -231,6 +276,19 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
 
     figments: list[Figment] = []
     summaries: list[dict[str, Any]] = []
+
+    if not clusters:
+        print("[lineage]   No clusters; falling back to one narrative per article")
+        for article in articles:
+            narrative, summary = _singleton_narrative(article)
+            figments.append(narrative)
+            summaries.append(summary)
+            article.meta["first_reporter"] = True
+        if figments:
+            hidden = figments[0].boundary.shape[0]
+            store.upsert(articles, hidden_size=hidden)
+            store.upsert(figments, hidden_size=hidden)
+        return {"narratives": summaries, "edges": 0}
 
     clusters.sort(
         key=lambda g: max((_parse_time(f) or datetime.max.replace(tzinfo=timezone.utc)) for f in g),

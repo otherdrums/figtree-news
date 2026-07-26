@@ -56,21 +56,33 @@ def ensure_article_summaries(
 def build_world_brief(
     model, tokenizer, store: FigmentStore, *, all_figs: list | None = None, top_n: int = 2
 ) -> dict[str, Any]:
-    """Generate a combined brief over the top narratives; persist as a figment."""
+    """Generate a combined brief over the top narratives; persist as a figment.
+
+    Falls back to the top articles directly when no narratives exist yet.
+    """
     # Clear VRAM before brief generation to prevent OOM
     import torch
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-    
+
     narratives = get_narratives(store)[:top_n]
     members: list[str] = []
     for n in narratives:
         members.extend(n["members"][:1])  # Only 1 article per narrative to reduce context
     figs = {f.figment_id: f for f in _article_images(store, all_figs=all_figs)}
     selected = [figs[mid] for mid in dict.fromkeys(members) if mid in figs][:top_n]
+
     if not selected:
-        print("[brief] no articles selected for brief generation")
-        return {"brief": "", "used": 0}
+        # Fallback: use the top articles directly when no narratives exist.
+        articles = sorted(
+            _article_images(store, all_figs=all_figs),
+            key=lambda f: f.meta.get("first_seen", "") or f.figment_id,
+            reverse=True,
+        )[:top_n]
+        selected = [a for a in articles if a.figment_id]
+        if not selected:
+            print("[brief] no articles selected for brief generation")
+            return {"brief": "", "used": 0}
 
     print(f"[brief] generating from {len(selected)} articles:")
     for f in selected:

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 
 import numpy as np
 
@@ -87,30 +88,27 @@ class CogitationEngine:
         """Synchronous version of merge_duplicates for thread pool."""
         all_figments = self.store.all()
         role_groups = {}
-        
+
         for fig in all_figments:
             role = fig.meta.get('role')
             if role:
                 role_groups.setdefault(role, []).append(fig)
-        
+
         merged_count = 0
-        
+
         for role, figments in role_groups.items():
             clusters = self._cluster_by_boundary(figments, threshold=0.95)
-            
+
             for cluster in clusters:
                 if len(cluster) > 1:
                     canonical = cluster[0]
                     for duplicate in cluster[1:]:
                         try:
-                            asyncio.run_coroutine_threadsafe(
-                                self._merge_figments(canonical, duplicate), 
-                                asyncio.get_event_loop()
-                            ).result(timeout=30)
+                            self._merge_figments_sync(canonical, duplicate)
                             merged_count += 1
                         except Exception as e:
                             print(f"[cogitate] Merge error: {e}")
-        
+
         return merged_count
 
     def _discover_links_sync(self) -> int:
@@ -209,40 +207,40 @@ class CogitationEngine:
         b = b.astype(np.float64)
         return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
     
-    async def _merge_figments(self, canonical: Figment, duplicate: Figment):
-        """Merge duplicate figment into canonical."""
+    def _merge_figments_sync(self, canonical: Figment, duplicate: Figment):
+        """Merge duplicate figment into canonical (synchronous)."""
         refs = canonical.meta.get('references', [])
         dup_refs = duplicate.meta.get('references', [])
         combined_refs = list(set(refs + dup_refs))
-        
+
         canonical.meta['references'] = combined_refs
         canonical.meta['reference_count'] = len(combined_refs)
         canonical.meta['merged_from'] = canonical.meta.get('merged_from', []) + [duplicate.figment_id]
-        
+
         for ref in dup_refs:
             sentence = self.store.get(ref)
             if sentence:
-                children = sentence.children
+                children = list(sentence.children)
                 if duplicate.figment_id in children:
                     children.remove(duplicate.figment_id)
                     if canonical.figment_id not in children:
                         children.append(canonical.figment_id)
                     sentence.children = children
                     self.store.upsert([sentence], hidden_size=sentence.boundary.shape[0])
-            
+
             article = self.store.get(ref)
             if article and article.meta.get('role_figments'):
-                role_figs = article.meta['role_figments']
+                role_figs = list(article.meta['role_figments'])
                 if duplicate.figment_id in role_figs:
                     role_figs.remove(duplicate.figment_id)
                     if canonical.figment_id not in role_figs:
                         role_figs.append(canonical.figment_id)
                     article.meta['role_figments'] = role_figs
                     self.store.upsert([article], hidden_size=article.boundary.shape[0])
-        
+
         self.store.upsert([canonical], hidden_size=canonical.boundary.shape[0])
         self.store.delete(duplicate.figment_id)
-        
+
         print(f"[cogitate]   Merged {duplicate.figment_id[:8]} into {canonical.figment_id[:8]}")
     
     async def generate_insights(self) -> int:
@@ -303,7 +301,7 @@ Respond with ONLY valid JSON:
                         meta={
                             'edge_type': 'insight',
                             'confidence': insight.get('confidence', 0.5),
-                            'generated_at': str(asyncio.get_event_loop().time())
+                            'generated_at': str(time.time())
                         },
                         figment_id=insight_id,
                         kind="edge",
