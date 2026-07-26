@@ -372,6 +372,8 @@ class Crawler:
                 url = art.get("url")
                 title = art.get("title", "")
                 print(f"[crawler] {source_id}: ingest failed for {url!r} ({title!r}): {exc}")
+                import traceback
+                traceback.print_exc()
 
         if total_in_feed > 0:
             print(f"[crawler] {source_id}: in_feed={total_in_feed}  added={added}  dedup={skipped_dedup}  short={skipped_short}")
