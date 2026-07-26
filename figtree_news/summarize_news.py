@@ -13,6 +13,7 @@ from typing import Any
 from figtree import Figment, FigmentGenerator, FigmentStore
 
 from .lineage import get_narratives
+from .model_lock import model_lock
 
 
 def _article_images(store: FigmentStore, *, all_figs: list | None = None) -> list[Figment]:
@@ -32,9 +33,10 @@ def ensure_article_summaries(
     for f in _article_images(store, all_figs=all_figs):
         if f.meta.get("summary"):
             continue
-        result = gen.generate(
-            [f], "Summarize the above article in 2-3 concise sentences.", max_new_tokens=96
-        )
+        with model_lock:
+            result = gen.generate(
+                [f], "Summarize the above article in 2-3 concise sentences.", max_new_tokens=96
+            )
         f.meta["summary"] = result.get("generated_text", "").strip()
         updated.append(f)
         done += 1
@@ -91,11 +93,12 @@ def build_world_brief(
         print(f"[brief]   - {src}: {title}")
 
     gen = FigmentGenerator(model, tokenizer)
-    result = gen.generate(
-        selected,
-        "Write a brief world news summary covering the following reports.",
-        max_new_tokens=150,
-    )
+    with model_lock:
+        result = gen.generate(
+            selected,
+            "Write a brief world news summary covering the following reports.",
+            max_new_tokens=150,
+        )
     brief = result.get("generated_text", "").strip()
     print(f"[brief] generated {len(brief)} chars: {brief[:100]}...")
     brief_fig = Figment.create(

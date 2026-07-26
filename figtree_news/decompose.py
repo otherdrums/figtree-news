@@ -19,6 +19,7 @@ from figtree import Figment, FigmentStore, FigmentGenerator
 
 from .associations import assert_association
 from .llm_config import LLMConfig
+from .model_lock import model_lock
 
 ROLES = ['who', 'what', 'where', 'when', 'why', 'how']
 
@@ -183,15 +184,16 @@ def _decompose_paragraph(
     sentence_texts = [s.text for s in sentences]
     prompt = _build_decompose_prompt(paragraph.text, sentence_texts)
     try:
-        result = gen.generate(
-            figments=[paragraph],
-            prompt=prompt,
-            max_new_tokens=1024,
-            temperature=0.0,
-            top_k=1,
-            top_p=1.0,
-            repetition_penalty=1.02,
-        )
+        with model_lock:
+            result = gen.generate(
+                figments=[paragraph],
+                prompt=prompt,
+                max_new_tokens=1024,
+                temperature=0.0,
+                top_k=1,
+                top_p=1.0,
+                repetition_penalty=1.02,
+            )
     except Exception as exc:
         print(f"[decompose] local model generation failed for paragraph {paragraph.figment_id[:8]}: {exc}")
         return [], [[] for _ in sentences]

@@ -29,6 +29,7 @@ from figtree import FigmentStore
 
 from .config import SourceRegistry
 from .ingest import _read_feed, ingest_articles
+from .model_lock import model_lock
 from .search_index import get_index
 
 # Built-in stopwords for keyword extraction (zero deps)
@@ -161,7 +162,6 @@ class Crawler:
         self._pending_decompose: list[str] = []
         self._pending_lock = threading.Lock()
         self._ingest_lock = threading.Lock()
-        self._model_lock = threading.Lock()
         self._new_articles: list[dict] = []
 
     # -- URL de-duplication ------------------------------------------------ #
@@ -300,7 +300,7 @@ class Crawler:
                     self._mark(url)
                 return False
 
-        with self._model_lock:
+        with model_lock:
             ingest_articles(
                 self.model,
                 self.tokenizer,
