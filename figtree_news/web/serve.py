@@ -129,6 +129,20 @@ _backward_time_range = "last_month"
 
 _TIME_RANGE_PROGRESSION = ["day", "last_week", "last_month", "last_year", "all"]
 
+# Map UI-style ranges to SearXNG's supported time_range parameter values.
+_UI_TO_SEARXNG_TIME_RANGE = {
+    "day": "day",
+    "last_week": "week",
+    "last_month": "month",
+    "last_year": "year",
+    "all": "",
+}
+
+
+def _normalize_searx_time_range(r: str) -> str:
+    """Return the SearXNG time_range value for a UI/internal range name."""
+    return _UI_TO_SEARXNG_TIME_RANGE.get(r, r)
+
 
 def _next_time_range(current: str) -> str:
     try:
@@ -372,7 +386,8 @@ async def _run_crawl_tick(
                 try:
                     got = await asyncio.to_thread(
                         crawler.search_searxng, q,
-                        categories=cfg.categories, time_range=srch_time_range,
+                        categories=cfg.categories,
+                        time_range=_normalize_searx_time_range(srch_time_range),
                         max_results=cfg.max_results, pages=cfg.pages,
                     )
                     search_added += got

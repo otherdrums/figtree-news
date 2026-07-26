@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 import httpx
+import numpy as np
 
 from figtree import Figment, FigmentStore
 
@@ -319,6 +320,12 @@ def evaluate_narratives(
     narratives = get_narratives(store, all_figs=all_figs)
     articles_by_id = {f.figment_id: f for f in _article_images(store)}
 
+    if not narratives:
+        print("[eval] no narratives to evaluate")
+        return {"verdicts": [], "corrections_suggested": 0}
+
+    hidden_size = all_figs[0].boundary.shape[0] if all_figs else 2560
+
     # Resumability
     partial_run = _find_partial_run(store)
     if partial_run:
@@ -326,16 +333,20 @@ def evaluate_narratives(
         run = partial_run
     else:
         run_id = _make_fig_id(f"eval:{time.strftime('%Y-%m-%dT%H:%M:%S')}")
+        run_boundary = (
+            all_figs[0].boundary.copy()
+            if all_figs
+            else np.zeros(hidden_size, dtype=np.float32)
+        )
         run = Figment.create(
             text=f"Evaluation run at {time.strftime('%Y-%m-%d %H:%M:%S')}",
-            boundary=all_figs[0].boundary.copy() if all_figs else None,
+            boundary=run_boundary,
             meta={"edge_type": "evaluation_run", "cycle": 0, "completed": False,
                   "started": time.strftime("%Y-%m-%dT%H:%M:%S")},
             figment_id=run_id,
             kind="edge",
         )
-        hidden = all_figs[0].boundary.shape[0] if all_figs else 2560
-        store.upsert([run], hidden_size=hidden)
+        store.upsert([run], hidden_size=hidden_size)
 
     already = _evaluated_narrative_ids(store, run)
     pending = [n for n in narratives if n["narrative_id"] not in already]

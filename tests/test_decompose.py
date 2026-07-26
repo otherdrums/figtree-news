@@ -111,3 +111,16 @@ def test_decompose_articles_without_model_skips():
 @pytest.mark.parametrize("raw", ["not json", "{\"incomplete\":", ""])
 def test_extract_json_returns_empty_on_invalid(raw):
     assert _extract_json(raw) == {}
+
+
+def test_searxng_time_range_mapping():
+    from figtree_news.web.serve import _normalize_searx_time_range, _next_time_range
+
+    assert _normalize_searx_time_range("day") == "day"
+    assert _normalize_searx_time_range("last_week") == "week"
+    assert _normalize_searx_time_range("last_month") == "month"
+    assert _normalize_searx_time_range("last_year") == "year"
+    assert _normalize_searx_time_range("all") == ""
+    assert _next_time_range("day") == "last_week"
+    assert _next_time_range("last_week") == "last_month"
+    assert _next_time_range("all") == "all"

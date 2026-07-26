@@ -357,15 +357,21 @@ class Crawler:
         for art in articles:
             if max_articles is not None and added >= max_articles:
                 break
-            if self.ingest_article(source_id, art):
-                added += 1
-            else:
+            try:
+                if self.ingest_article(source_id, art):
+                    added += 1
+                else:
+                    url = art.get("url")
+                    text = art.get("text", "")
+                    if url and self._already(url):
+                        skipped_dedup += 1
+                    elif len(text.strip()) < 40:
+                        skipped_short += 1
+            except Exception as exc:
+                # Log the failing article and continue with the rest of the feed.
                 url = art.get("url")
-                text = art.get("text", "")
-                if url and self._already(url):
-                    skipped_dedup += 1
-                elif len(text.strip()) < 40:
-                    skipped_short += 1
+                title = art.get("title", "")
+                print(f"[crawler] {source_id}: ingest failed for {url!r} ({title!r}): {exc}")
 
         if total_in_feed > 0:
             print(f"[crawler] {source_id}: in_feed={total_in_feed}  added={added}  dedup={skipped_dedup}  short={skipped_short}")
