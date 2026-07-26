@@ -21,24 +21,6 @@ from typing import Any
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-
-warnings.filterwarnings("ignore", message=".*_check_is_size.*")
-warnings.filterwarnings("ignore", category=FutureWarning, module="bitsandbytes")
-
-# Configure logging BEFORE importing modules that create loggers
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-# Reduce noise from third-party libraries
-logging.getLogger("transformers").setLevel(logging.ERROR)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -54,6 +36,23 @@ from ..llm_config import LLMConfig
 from ..pipeline import run_pipeline
 from ..query import query as run_query
 from ..search_index import get_index
+
+warnings.filterwarnings("ignore", message=".*_check_is_size.*")
+warnings.filterwarnings("ignore", category=FutureWarning, module="bitsandbytes")
+
+# Configure logging AFTER torch/imports; levels are applied to existing loggers.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+# Reduce noise from third-party libraries
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 def _e(s: str) -> str:
     """Escape HTML special characters."""
@@ -162,7 +161,7 @@ def _build(store: FigmentStore, *, force: bool = False) -> dict[str, Any]:
     articles = [
         f
         for f in all_figs
-        if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()
+        if f.kind == "article" and f.meta.get("source_id")
     ]
     narratives = get_narratives(store, all_figs=all_figs)
     derivatives = get_derivatives(store, all_figs=all_figs)
@@ -250,6 +249,12 @@ async def _run_crawl_tick(
             _model_cache[cache_key] = (model, tokenizer)
             _gen_cache["gen"] = FigmentGenerator(model, tokenizer)
             print(f"[crawl] model loaded ({model_id.rsplit('/',1)[-1]})")
+
+        # Bind the local model to the decomposition engine so it can decompose
+        # articles using the local model rather than the external LLM.
+        if _decompose_engine:
+            _decompose_engine.model = model
+            _decompose_engine.tokenizer = tokenizer
 
         registry = SourceRegistry.load(sources_path)
 

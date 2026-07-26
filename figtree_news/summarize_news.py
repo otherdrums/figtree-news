@@ -19,7 +19,7 @@ def _article_images(store: FigmentStore, *, all_figs: list | None = None) -> lis
     return [
         f
         for f in (all_figs if all_figs is not None else store.all())
-        if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()
+        if f.kind == "article" and f.meta.get("source_id")
     ]
 
 
@@ -89,8 +89,9 @@ def build_world_brief(
     brief_fig = Figment.create(
         text=brief,
         boundary=selected[0].boundary.copy(),
-        meta={"edge_type": "brief", "kind": "world"},
+        meta={"edge_type": "brief", "brief_kind": "world"},
         figment_id="brief:world",
+        kind="edge",
     )
     hidden = selected[0].boundary.shape[0]
     store.upsert([brief_fig], hidden_size=hidden)

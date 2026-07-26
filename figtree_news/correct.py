@@ -161,6 +161,7 @@ def _split_article(
                 "split_from": narrative.figment_id,
             },
             figment_id=new_nid,
+            kind="edge",
         )
         store.upsert([new_narrative], hidden_size=narrative.boundary.shape[0])
 

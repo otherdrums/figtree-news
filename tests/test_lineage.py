@@ -33,7 +33,6 @@ def _article(source_id, text, published, url, fid, role_figment_ids=None):
         boundary=np.zeros(8, dtype="float32"),
         meta={
             "source_id": source_id,
-            "is_image": True,
             "url": url,
             "published": published,
             "first_seen": published,
@@ -42,6 +41,7 @@ def _article(source_id, text, published, url, fid, role_figment_ids=None):
         },
         figment_id=fid,
         trust=0.8,
+        kind="article",
     )
 
 

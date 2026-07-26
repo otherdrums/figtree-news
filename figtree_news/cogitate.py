@@ -118,7 +118,7 @@ class CogitationEngine:
         cooccurrence = {}
         
         for article in self.store.all():
-            if not article.meta.get('is_image'):
+            if article.kind != "article":
                 continue
             
             role_figment_ids = article.meta.get('role_figments', [])
@@ -151,7 +151,8 @@ class CogitationEngine:
                                 'figment_b': fig2_id,
                                 'weight': count
                             },
-                            figment_id=rel_id
+                            figment_id=rel_id,
+                            kind="edge",
                         )
                         self.store.upsert([rel], hidden_size=fig1.boundary.shape[0])
                         relationship_count += 1
@@ -304,7 +305,8 @@ Respond with ONLY valid JSON:
                             'confidence': insight.get('confidence', 0.5),
                             'generated_at': str(asyncio.get_event_loop().time())
                         },
-                        figment_id=insight_id
+                        figment_id=insight_id,
+                        kind="edge",
                     )
                     self.store.upsert([insight_fig], hidden_size=boundary.shape[0])
                     insight_count += 1

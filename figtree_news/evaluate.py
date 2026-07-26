@@ -264,6 +264,7 @@ def _upsert_correction(
             "confirmation_count": 1,
         },
         figment_id=corr_id,
+        kind="edge",
     )
 
 
@@ -303,7 +304,7 @@ def _get_narrative_figment(store: FigmentStore, narrative: dict[str, Any]) -> Fi
 def _article_images(store: FigmentStore) -> list[Figment]:
     return [
         f for f in store.all()
-        if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()
+        if f.kind == "article" and f.meta.get("source_id")
     ]
 
 
@@ -331,6 +332,7 @@ def evaluate_narratives(
             meta={"edge_type": "evaluation_run", "cycle": 0, "completed": False,
                   "started": time.strftime("%Y-%m-%dT%H:%M:%S")},
             figment_id=run_id,
+            kind="edge",
         )
         hidden = all_figs[0].boundary.shape[0] if all_figs else 2560
         store.upsert([run], hidden_size=hidden)
@@ -360,6 +362,7 @@ def evaluate_narratives(
                 boundary=all_figs[0].boundary.copy() if all_figs else None,
                 meta={"edge_type": "verdict", "target_id": nid, "verdict": "pass",
                       "verdict_type": "cluster"},
+                kind="edge",
             )
             verdicts.append(verdict)
             continue
@@ -395,6 +398,7 @@ def evaluate_narratives(
                     "issues": json.dumps(issues),
                     "llm_response": result.get("content", ""),
                 },
+                kind="edge",
             )
             verdicts.append(verdict)
 
@@ -438,6 +442,7 @@ def evaluate_narratives(
                         "source_narrative": nid,
                     },
                     figment_id=param_id,
+                    kind="edge",
                 )
                 verdicts.append(param)
 
@@ -473,6 +478,7 @@ def evaluate_narratives(
                             "severity": severity,
                             "cosine_similarity": cos_sim,
                         },
+                        kind="edge",
                     )
                     verdicts.append(shift_verdict)
 
@@ -545,7 +551,7 @@ def review_brief(
 
     # Get the articles used in the brief
     all_figs = store.all()
-    articles = [f for f in all_figs if f.meta.get("is_image") and not f.is_edge()]
+    articles = [f for f in all_figs if f.kind == "article"]
 
     prompt = (
         f"You are a news editor reviewing a world brief.\n\n"
@@ -573,6 +579,7 @@ def review_brief(
             "issues": json.dumps(issues),
             "llm_response": result.get("content", ""),
         },
+        kind="edge",
     )
     hidden = all_figs[0].boundary.shape[0] if all_figs else 2560
     store.upsert([verdict], hidden_size=hidden)
@@ -641,7 +648,7 @@ def label_article_pairs(
         })
     
     print(f"[eval] labeled {len(labels)} article pairs with LLM")
-    same_count = sum(1 for l in labels if l["same_event"])
+    same_count = sum(1 for label in labels if label["same_event"])
     print(f"[eval]   same-event: {same_count}, different-event: {len(labels) - same_count}")
     
     return labels

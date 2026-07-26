@@ -48,7 +48,6 @@ def _seed_store(tmp_path) -> FigmentStore:
         boundary=np.zeros(8, dtype="float32"),
         meta={
             "source_id": "reuters",
-            "is_image": True,
             "decomposed": True,
             "role_figments": [trump.figment_id, disney.figment_id, what.figment_id],
             "url": "http://reuters.com/1",
@@ -57,6 +56,7 @@ def _seed_store(tmp_path) -> FigmentStore:
         },
         figment_id="img1",
         trust=0.8,
+        kind="article",
     )
 
     # Article 2: Trump + Disney World but different surface form (DJT + Walt Disney World)
@@ -70,7 +70,6 @@ def _seed_store(tmp_path) -> FigmentStore:
         boundary=np.zeros(8, dtype="float32"),
         meta={
             "source_id": "cnn",
-            "is_image": True,
             "decomposed": True,
             "role_figments": [djt_fig.figment_id, wdw_fig.figment_id, what2.figment_id],
             "url": "http://cnn.com/1",
@@ -79,6 +78,7 @@ def _seed_store(tmp_path) -> FigmentStore:
         },
         figment_id="img2",
         trust=0.7,
+        kind="article",
     )
 
     # Article 3: only has Trump (Disney World), should NOT be in the intersection with Disney
@@ -88,7 +88,6 @@ def _seed_store(tmp_path) -> FigmentStore:
         boundary=np.zeros(8, dtype="float32"),
         meta={
             "source_id": "foxnews",
-            "is_image": True,
             "decomposed": True,
             "role_figments": [trump.figment_id, what3.figment_id],
             "url": "http://foxnews.com/1",
@@ -97,6 +96,7 @@ def _seed_store(tmp_path) -> FigmentStore:
         },
         figment_id="img3",
         trust=0.5,
+        kind="article",
     )
 
     store.upsert(

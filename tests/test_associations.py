@@ -49,12 +49,12 @@ def _seed_store(tmp_path) -> FigmentStore:
         boundary=np.zeros(8, dtype="float32"),
         meta={
             "source_id": "reuters",
-            "is_image": True,
             "decomposed": True,
             "role_figments": [trump1.figment_id, disney1.figment_id],
         },
         figment_id="img1",
         trust=0.8,
+        kind="article",
     )
 
     b = Figment.create(
@@ -62,12 +62,12 @@ def _seed_store(tmp_path) -> FigmentStore:
         boundary=np.zeros(8, dtype="float32"),
         meta={
             "source_id": "cnn",
-            "is_image": True,
             "decomposed": True,
             "role_figments": [djt.figment_id, disney2.figment_id],
         },
         figment_id="img2",
         trust=0.7,
+        kind="article",
     )
 
     store.upsert(

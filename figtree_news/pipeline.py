@@ -29,10 +29,6 @@ log = logging.getLogger(__name__)
 
 _POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="pipeline")
 
-_DECOMPOSE_POLL_INTERVAL = 2.0
-_DECOMPOSE_TIMEOUT = 600.0
-
-
 def run_pipeline(
     model,
     tokenizer,
@@ -50,41 +46,20 @@ def run_pipeline(
     all_figs = store.all()
     log.info("loaded %d figments from store", len(all_figs))
 
-    # ── Phase 1: Decomposition (external LLM, wait for new articles) ──────
+    # ── Phase 1: Decomposition (local model) ───────────────────────────────
     decompose_out = {"queued": 0, "completed": 0}
-    if llm_config and llm_config.url and decompose_engine:
+    if decompose_engine:
         try:
             t0 = time.time()
-            articles = [f for f in all_figs if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()]
-            needs_decomp = [a for a in articles if not a.meta.get("decomposed")]
-            decompose_out["queued"] = len(needs_decomp)
-            
-            if needs_decomp:
-                log.info("Phase 1: Decomposition — %d articles queued, waiting...", len(needs_decomp))
-                for a in needs_decomp:
-                    import asyncio
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            import concurrent.futures
-                            future = concurrent.futures.Future()
-                            asyncio.run_coroutine_threadsafe(
-                                decompose_engine.queue_article(a.figment_id), loop
-                            )
-                        else:
-                            asyncio.run(decompose_engine.queue_article(a.figment_id))
-                    except RuntimeError:
-                        pass
-                
-                completed = _wait_for_decomposition(store, [a.figment_id for a in needs_decomp])
-                decompose_out["completed"] = completed
-                log.info("  decomposed=%d/%d  (%.1fs)", completed, len(needs_decomp), time.time() - t0)
-            else:
-                log.info("Phase 1: Decomposition — all articles already decomposed")
+            decompose_out = decompose_engine.decompose_articles_sync()
+            log.info("  decomposed=%d/%d  (%.1fs)",
+                     decompose_out.get("completed", 0),
+                     decompose_out.get("queued", 0),
+                     time.time() - t0)
         except Exception as exc:
             log.error("Phase 1 FAILED: %s", exc, exc_info=True)
     else:
-        log.info("Phase 1: Decomposition SKIPPED (LLM not enabled)")
+        log.info("Phase 1: Decomposition SKIPPED (no engine)")
 
     # ── Phase 2: Trust + Lineage (parallel, CPU) ──────────────────────────
     all_figs = store.all()
@@ -194,29 +169,6 @@ def run_pipeline(
     }
 
 
-def _wait_for_decomposition(store: FigmentStore, article_ids: list[str]) -> int:
-    """Poll store until articles have role_figments (decomposed=True).
-
-    Returns count of successfully decomposed articles.
-    """
-    completed = 0
-    remaining = set(article_ids)
-    deadline = time.time() + _DECOMPOSE_TIMEOUT
-    while remaining and time.time() < deadline:
-        newly_done = set()
-        for aid in remaining:
-            fig = store.get(aid)
-            if fig and fig.meta.get("decomposed"):
-                newly_done.add(aid)
-        completed += len(newly_done)
-        remaining -= newly_done
-        if remaining:
-            time.sleep(_DECOMPOSE_POLL_INTERVAL)
-    if remaining:
-        log.warning("Decomposition timeout — %d articles still pending", len(remaining))
-    return completed
-
-
 def _phase_trust(store: FigmentStore, all_figs: list) -> dict[str, Any]:
     try:
         t0 = time.time()
@@ -254,7 +206,7 @@ def _phase_llm_labeling(store: FigmentStore, all_figs: list, llm_config: LLMConf
         t0 = time.time()
         log.info("Phase 2c: LLM-based clustering evaluation")
         from . import evaluate
-        articles = [f for f in all_figs if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()]
+        articles = [f for f in all_figs if f.kind == "article" and f.meta.get("source_id")]
         if len(articles) >= 2:
             client = evaluate.LLMClient(llm_config)
             labels = evaluate.label_article_pairs(articles, client, max_pairs=20)

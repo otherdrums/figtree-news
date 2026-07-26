@@ -26,7 +26,7 @@ def export_graph(store: FigmentStore, path: str | None = None) -> dict[str, Any]
                 "source_id": f.meta.get("source_id"),
                 "edge_type": f.meta.get("edge_type"),
                 "trust": f.trust,
-                "is_image": f.meta.get("is_image", False),
+                "kind": f.kind,
             }
         )
         for child in f.children:

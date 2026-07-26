@@ -8,10 +8,9 @@ information, and optional boundary/KV materialization for faithful context."""
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-from figtree import Figment, FigmentStore
+from figtree import FigmentStore
 from figtree.generate import FigmentGenerator
 
 
@@ -25,7 +24,9 @@ def materialize_context(
     include_text: bool = True,
     include_boundaries: bool = False,
     include_kv: bool = False,
+    include_paragraphs: bool = False,
     max_articles_per_narrative: int = 10,
+    max_paragraphs_per_article: int = 10,
 ) -> dict[str, Any]:
     """Assemble a structured context package from narrative IDs.
 
@@ -40,7 +41,9 @@ def materialize_context(
     include_text: include article text in context.
     include_boundaries: include boundary vectors per article.
     include_kv: include per-article K/V blobs (requires model/tokenizer/kv_manager).
+    include_paragraphs: drill down to paragraphs within each article.
     max_articles_per_narrative: cap articles per narrative.
+    max_paragraphs_per_article: cap paragraphs per article when include_paragraphs=True.
 
     Returns
     -------
@@ -53,6 +56,7 @@ def materialize_context(
         - context_text: concatenated article texts for generation
     """
     all_figs = store.all()
+    by_id = {f.figment_id: f for f in all_figs}
     narratives_data: list[dict[str, Any]] = []
     all_article_ids: list[str] = []
     source_trusts: dict[str, float] = {}
@@ -101,6 +105,29 @@ def materialize_context(
                     if article_fig.boundary_emb is not None
                     else None
                 )
+
+            # Paragraph drill-down
+            if include_paragraphs:
+                paragraphs_meta: list[dict[str, Any]] = []
+                for pid in article_fig.children:
+                    para = by_id.get(pid)
+                    if para is None or para.kind != "paragraph":
+                        continue
+                    para_entry: dict[str, Any] = {
+                        "paragraph_id": pid,
+                        "text": para.text,
+                        "role_figments": para.meta.get("role_figments", []),
+                    }
+                    if include_boundaries:
+                        para_entry["boundary"] = para.boundary.tolist()
+                        para_entry["boundary_emb"] = (
+                            para.boundary_emb.tolist()
+                            if para.boundary_emb is not None
+                            else None
+                        )
+                    paragraphs_meta.append(para_entry)
+                entry["paragraphs"] = paragraphs_meta[:max_paragraphs_per_article]
+
             all_article_ids.append(mid)
             articles_meta.append(entry)
 

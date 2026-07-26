@@ -55,7 +55,7 @@ def _articles(store: FigmentStore, *, all_figs: list | None = None) -> list[Figm
     return [
         f
         for f in (all_figs if all_figs is not None else store.all())
-        if f.meta.get("is_image") and f.meta.get("source_id") and not f.is_edge()
+        if f.kind == "article" and f.meta.get("source_id")
     ]
 
 
@@ -270,6 +270,7 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
                         figment_id=deriv_id,
                         sources=[first.figment_id],
                         children=[f.figment_id],
+                        kind="edge",
                     )
                 )
             updated_articles.append(f)
@@ -321,6 +322,7 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
                 "new_article_count": new_count,
             },
             figment_id=narrative_id,
+            kind="edge",
         )
         figments.append(narrative)
         summaries.append(

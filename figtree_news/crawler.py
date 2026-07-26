@@ -104,7 +104,6 @@ def _extract_keywords(articles: list[dict], top_n: int = 10) -> list[str]:
     enough to return targeted news results.
     """
     import re
-    from itertools import combinations
 
     phrase_counts = Counter()
     for art in articles:
@@ -319,7 +318,7 @@ class Crawler:
             # Find the article figment we just created
             all_figs = self.store.all()
             for fig in reversed(all_figs):
-                if (fig.meta.get("is_image") and 
+                if (fig.kind == "article" and
                     fig.meta.get("source_id") == source_id and
                     fig.meta.get("url") == url):
                     with self._pending_lock:

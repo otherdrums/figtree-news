@@ -28,9 +28,10 @@ def _fake_figments(source_id="reuters", n=3):
     image = Figment.create(
         text="Image summary of the report.",
         boundary=np.zeros(8, dtype="float32"),
-        meta={"source_id": source_id, "is_image": True, "base_trust": 0.9},
+        meta={"source_id": source_id, "base_trust": 0.9},
         children=children,
         trust=0.9,
+        kind="article",
     )
     trust_fig = Figment.create(
         text=f"Source {source_id} has trust 0.90",
@@ -38,6 +39,7 @@ def _fake_figments(source_id="reuters", n=3):
         meta={"edge_type": "trust", "source_id": source_id, "score": 0.9, "base_trust": 0.9},
         sources=[image.figment_id],
         trust=0.9,
+        kind="trust",
     )
     return [image] + figs + [trust_fig]
 

@@ -44,7 +44,7 @@ def evaluate(
     for sid, sfigs in by_source.items():
         if source_id and sid != source_id:
             continue
-        article = next((f for f in sfigs if f.meta.get("is_image")), None)
+        article = next((f for f in sfigs if f.kind == "article"), None)
         source_text = article.text if article else "\n\n".join(f.text for f in sfigs)
         source_atom_count = len(extract_atoms(source_text))
         result = gen.generate_faithful(

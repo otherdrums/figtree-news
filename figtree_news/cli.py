@@ -338,7 +338,7 @@ def build_newspaper_cmd(
                 "summary": a.meta.get("summary", ""),
             }
             for a in store.all()
-            if a.meta.get("is_image") and a.meta.get("source_id") and not a.is_edge()
+            if a.kind == "article" and a.meta.get("source_id")
         ],
     }
     with open(out, "w", encoding="utf-8") as fh:

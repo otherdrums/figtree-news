@@ -216,6 +216,7 @@ def assert_association(
             "evidence": evidence,
         },
         figment_id=figment_id,
+        kind="edge",
     )
 
     hs = hidden_size or association.boundary.shape[0]

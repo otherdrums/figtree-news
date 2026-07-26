@@ -41,11 +41,11 @@ def _seed(tmp_path):
     a = Figment.create(
         text="The Election was held on Tuesday.", boundary=np.zeros(8, dtype="float32"),
         meta={
-            "source_id": "reuters", "is_image": True, "url": "http://reuters.com/1",
+            "source_id": "reuters", "url": "http://reuters.com/1",
             "published": "Mon, 01 Jan 2024 10:00:00 GMT", "title": "France Election Results",
             "decomposed": True, "role_figments": [who.figment_id, what.figment_id, when.figment_id],
         },
-        figment_id="a1", trust=0.9,
+        figment_id="a1", trust=0.9, kind="article",
     )
 
     who_b = _role_figment("who", "Election Commission", "b1")
@@ -55,11 +55,11 @@ def _seed(tmp_path):
     b = Figment.create(
         text="The Election results were announced.", boundary=np.zeros(8, dtype="float32"),
         meta={
-            "source_id": "blog", "is_image": True, "url": "http://blog.com/1",
+            "source_id": "blog", "url": "http://blog.com/1",
             "published": "Tue, 02 Jan 2024 10:00:00 GMT", "title": "France Election Results Announced",
             "decomposed": True, "role_figments": [who_b.figment_id, what_b.figment_id, when_b.figment_id],
         },
-        figment_id="b1", trust=0.5,
+        figment_id="b1", trust=0.5, kind="article",
     )
 
     store.upsert([a, b, who, what, when, who_b, what_b, when_b], hidden_size=8)
