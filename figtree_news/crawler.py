@@ -301,7 +301,7 @@ class Crawler:
                 return False
 
         with model_lock:
-            ingest_articles(
+            ing_stats = ingest_articles(
                 self.model,
                 self.tokenizer,
                 self.store,
@@ -315,15 +315,10 @@ class Crawler:
         # Queue for background decomposition (thread-safe: append to list,
         # the async caller drains it after to_thread returns)
         if self.decompose_engine and url:
-            # Find the article figment we just created
-            all_figs = self.store.all()
-            for fig in reversed(all_figs):
-                if (fig.kind == "article" and
-                    fig.meta.get("source_id") == source_id and
-                    fig.meta.get("url") == url):
-                    with self._pending_lock:
-                        self._pending_decompose.append(fig.figment_id)
-                    break
+            article_ids = ing_stats.get("article_ids", [])
+            if article_ids:
+                with self._pending_lock:
+                    self._pending_decompose.append(article_ids[0])
         
         if url:
             self._mark(url)

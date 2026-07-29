@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import threading
 
-model_lock = threading.Lock()
+model_lock = threading.RLock()
 
 
 def locked_forward(func):

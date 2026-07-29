@@ -18,19 +18,19 @@ python3 -m pytest tests/test_web.py -v  # specific test file
 
 ```
 figtree_news/
-├── cli.py              # Typer CLI: crawl, serve, search, query, lineage, export, eval
+├── cli.py              # Typer CLI: crawl, serve, search, query, lineage, export, eval, boundary-threshold
 ├── config.py           # SourceRegistry + CrawlerState + SourceConfig dataclasses
 ├── searxng.py          # SearXNG client: search → article dicts with image/video
 ├── ingest.py           # Feed/article → figments with provenance
 ├── crawler.py          # RSS + SearXNG + BFS link-follower (thread-safe ingestion)
 ├── pipeline.py         # Parallel pipeline orchestration (ThreadPoolExecutor)
-├── lineage.py          # Role figment clustering + frame shift + derivatives (expands through associations)
-├── trust.py            # Source trust propagation
-├── decompose.py        # WHO/WHAT/WHERE/WHEN/WHY/HOW extraction + inline cogitation + auto-associations
-├── cogitate.py         # Periodic insight generation
+├── lineage.py          # Role figment clustering (min 2 shared) + frame shift + derivative edges
+├── trust.py            # Source trust propagation (uses FigtreeGraph, no O(n²) dedup)
+├── decompose.py        # WHO/WHAT/WHERE/WHEN/WHY/HOW extraction via local model + inline cogitation
+├── cogitate.py         # Periodic insight generation + merge/consolidation
 ├── evaluate.py         # External LLM: cluster validation, frame shift, brief review
 ├── correct.py          # Self-correction: confirmation threshold + auto-apply
-├── llm_config.py       # External LLM configuration
+├── llm_config.py       # External LLM configuration (optional — uses local model by default)
 ├── summarize_news.py   # Per-article summaries + world brief
 ├── query.py            # Embed query → nearest figments → generate
 ├── search_index.py     # SQLite FTS5 full-text search (thread-safe)
@@ -39,17 +39,9 @@ figtree_news/
 ├── context.py          # Context materialization: assemble structured context packages from narratives
 ├── export.py           # Graph export as JSON
 ├── eval.py             # Per-source faithful-recall eval
+├── model_lock.py       # Shared RLock for GPU model forward passes (serializes all GPU work)
 └── web/
-├── evaluate.py         # External LLM: cluster validation, frame shift, brief review
-├── correct.py          # Self-correction: confirmation threshold + auto-apply
-├── llm_config.py       # External LLM configuration
-├── summarize_news.py   # Per-article summaries + world brief
-├── query.py            # Embed query → nearest figments → generate
-├── search_index.py     # SQLite FTS5 full-text search
-├── eval.py             # Per-source faithful-recall eval
-├── export.py           # Graph export as JSON
-└── web/
-    ├── serve.py        # FastAPI + auto-crawl + parallel crawl tick
+    ├── serve.py        # FastAPI + auto-crawl (ingest only; pipeline loop owns summaries/brief)
     ├── templates/      # Jinja2 HTML (base.html, index.html, article.html, etc.)
     └── static/
         ├── style.css   # Dark theme CSS
@@ -78,13 +70,14 @@ figtree-news search "AI regulation" --time-range day --max 10
 ```
 Phase 1: Feeds + Seeds → asyncio.gather (all feeds + seeds in parallel)
 Phase 2: SearXNG queries → sequential (each query triggers GPU ingestion)
-Phase 3: Pipeline → single thread (pipeline handles its own parallelism)
+Phase 3: Queue pending decompose → background pipeline loop handles the rest
 ```
 
 ### Pipeline (pipeline.py `run_pipeline`)
 ```
-Phase 1: Decomposition (external LLM — wait for new articles)
-Phase 2: Trust + Lineage (parallel, CPU) — lineage uses role figments
+Phase 1: Decomposition (local model — role figments)
+Phase 2a: Trust (CPU) + 2b: Lineage (CPU, parallel) — lineage uses role figments
+Phase 2c: LLM clustering eval → merge/split narratives
 Phase 3: Summaries (GPU, sequential, max 10 per tick)
 Phase 4: Brief (GPU) + Eval (I/O) — parallel
 Phase 5: Corrections + Brief review
@@ -97,7 +90,9 @@ Role figments are deduplicated by `hash(role + normalized_text)` — exact
 semantic matching regardless of how different outlets phrase headlines.
 
 Falls back to boundary similarity (cosine > 0.95 within 48h) when the
-external LLM is not configured.
+external LLM is not configured.  (Note: boundary fallback was removed in
+v0.2; singletons + LLM merge is the current design.  Boundary data is
+collected via ``--boundary-threshold`` CLI for future re-tuning.)
 
 ### Decomposition (decompose.py)
 3 async workers consume from `asyncio.Queue`. Each article decomposition includes
@@ -112,7 +107,7 @@ store has < 50 articles, crawling starts automatically with persisted interval
 ## Key Design Details
 
 - **Role figment clustering**: Narratives built from shared role figments, not text heuristics
-- **Decomposition before clustering**: Pipeline waits for external LLM to extract roles
+- **Decomposition before clustering**: Pipeline waits for external 35B LLM to extract roles
 - **Auto-crawl on startup**: Server starts continuous crawling immediately if configured
 - **Parallel feed crawling**: All feeds + seeds via asyncio.gather
 - **Sequential SearXNG**: Queries run one at a time (each triggers GPU ingestion)
@@ -123,6 +118,16 @@ store has < 50 articles, crawling starts automatically with persisted interval
 - **Default budget**: 15 articles per tick (1 per feed), 300s interval
 - **External LLM**: Qwen3.6-35B — must pass `chat_template_kwargs: {"enable_thinking": false}`
 - **SearXNG auto-queries**: Keywords extracted from newly ingested articles; no manual query list
+- **Pipeline loop**: Independent background task runs full pipeline (summaries, brief) on cadence; crawl tick only ingests
+- **Light store.all()**: The `boundaries` per-layer column (92,160 floats/row) is no longer persisted or loaded; `store.all()` is ~200MB not 6GB
+- **Background workers disabled**: When external LLM is configured, background decompose workers are NOT started after crawl ticks. The pipeline's Phase 1 handles ALL decomposition sequentially with a shared `created` dict, enabling cross-article dedup. Background workers would create unmerged role figments (each worker has its own local `created` dict).
+- **Entity dedup**: Three-layer dedup strategy: (1) exact normalized-text hash match, (2) intra-article heuristic-only (containment >= 0.66 or edit_sim >= 0.70), (3) cross-article LLM arbiter (textual overlap prefilter first). Dedup_obs figments record heuristic scores + LLM verdict for threshold analysis.
+- **Cross-article heuristic prefilter**: Requires `containment >= 0.4` or `(jaccard >= 0.25 and edit_sim >= 0.25)` — boundary sim alone is too noisy for cross-article comparison.
+- **Extraction prompt**: Uses few-shot canonicalization with explicit "SINGLE entity only" constraint to prevent comma-separated lists. Includes a negative example showing the wrong (list) and correct (single) format.
+- **SearXNG**: Enabled in sources.json (`searxng.enabled: true`, `crawler.searxng_enabled: true`). Queries auto-derived from RSS article keywords each tick.
+- **Brief quality**: Pipeline uses `top_n=8` (not 2). Review prompt reports actual article count, not total store articles, preventing false negatives.
+- **Narrative merging**: `label_article_pairs` samples both within-cluster (split detection) and cross-cluster (merge detection) pairs. Pipeline automatically merges/splits narratives from LLM labels via `merge_narratives_by_llm_labels` / `split_narratives_by_llm_labels`.
+- **Config schema**: `demo/config_schema.json` documents all config sections (sources, feeds, seeds, searxng, llm, crawler).
 
 ## Data Flow
 
@@ -139,7 +144,7 @@ Startup → auto-start continuous crawl (if configured)
     │   Each query → search + fetch + ingest
     │
     ├─ Phase 3 (pipeline):
-    │   1. Decomposition (external LLM) → role figments
+    │   1. Decomposition (local model) → role figments
     │   2. Trust + Lineage (parallel) → role figment clustering
     │   3. Summaries (GPU, max 10)
     │   4. Brief (GPU) + Eval (I/O)
@@ -155,7 +160,7 @@ Startup → auto-start continuous crawl (if configured)
 - `"sources"`: `{source_id: {name, base_trust, url, kind, logo_url}}` — source metadata
 - `"searxng"`: `{url, enabled, categories, time_range, max_results, pages}` — SearXNG settings
   - **No `queries` field** — queries are auto-derived from RSS article keywords each tick
-- `"llm"`: `{url, model, timeout, enabled, ...}` — external LLM config
+- `"llm"`: `{url, model, timeout, enabled, decompose, find_missed_merges, review_brief, ...}` — external LLM config; `decompose: false` skips Phase 1 decomposition
 - `"crawler"`: `{continuous, smart_crawl, interval, max_articles, max_stories, llm_enabled, ...}` — **persisted crawler state**
 - Unknown domains auto-registered with `base_trust=0.7`
 
@@ -165,7 +170,7 @@ Startup → auto-start continuous crawl (if configured)
    never call `asyncio.create_task()` from there — use `_pending_decompose` list instead
 2. **Thread safety**: `Crawler._model_lock` serializes GPU; `_ingest_lock` protects `seen`/`_new_articles`
 3. **Numpy truth value**: Never `if not array:` on numpy — use `if array is None:`
-4. **Role figment clustering**: Requires decomposition to run first; boundary fallback if no LLM
+4. **Role figment clustering**: Requires decomposition to run first; singletons + LLM merge if no roles
 5. **Qwen3.6 thinking**: LLM puts ALL output in `reasoning_content` unless `enable_thinking: false`
 6. **SearXNG**: Requires JSON format enabled in its settings.yml; may need restart
 7. **VRAM**: 3GB GPU is tight — max 10 summaries per tick, skip brief if low VRAM

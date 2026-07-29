@@ -16,9 +16,10 @@ import os
 import sys
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:128"
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
@@ -101,9 +102,17 @@ STATIC_DIR = os.path.join(_HERE, "static")
 
 _gen_cache: dict[str, Any] = {}
 _model_cache: dict[str, Any] = {}
+_model_load_lock: asyncio.Lock = asyncio.Lock()
+# Dedicated executor for pipeline/crawl work so it does not contend with the
+# background decompose workers for the default executor's limited workers.
+_pipeline_executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="pipeline")
+_crawl_executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="crawl")
 _data_cache: dict[str, Any] = {"data": None, "ts": 0.0}
 _decompose_engine: Any = None
 _cogitate_engine: Any = None
+_pipeline_task: asyncio.Task | None = None
+_first_crawl_done: asyncio.Event = asyncio.Event()
+_pipeline_running = False
 _crawl_state: dict[str, Any] = {
     "running": False,
     "task": None,
@@ -167,6 +176,113 @@ def _get_generator():
     return _gen_cache["gen"]
 
 
+async def _load_model_cached(model_id: str = "unsloth/Qwen3-4B-bnb-4bit") -> tuple[Any, Any]:
+    if model_id in _model_cache:
+        return _model_cache[model_id]
+    async with _model_load_lock:
+        if model_id in _model_cache:
+            return _model_cache[model_id]
+        model, tokenizer = await asyncio.to_thread(load_model, model_id)
+        _model_cache[model_id] = (model, tokenizer)
+        if "gen" not in _gen_cache:
+            _gen_cache["gen"] = FigmentGenerator(model, tokenizer)
+        return model, tokenizer
+
+
+async def _run_pipeline_loop(
+    store: FigmentStore,
+    sources: str,
+    interval: int = 300,
+):
+    """Background task that keeps the UI data cache fresh by running the pipeline.
+
+    Waits for the first crawl tick to finish before running (pipeline needs
+    articles to decompose). Runs full pipeline (decompose, lineage, summaries,
+    brief, eval) every ``interval`` seconds.
+    """
+    # Wait for the first crawl tick to finish so articles are ingested
+    # before the pipeline tries to decompose and cluster them.
+    try:
+        await asyncio.wait_for(_first_crawl_done.wait(), timeout=3600)
+    except asyncio.TimeoutError:
+        print("[pipeline-loop] first crawl not done yet, proceeding (waited 1h)")
+
+    while True:
+        try:
+            model, tokenizer = await _load_model_cached()
+            llm_config = LLMConfig.from_sources_json(sources)
+            print("[pipeline-loop] running pipeline...")
+
+            def _on_lineage(store, _trust_out, lineage_out):
+                _data_cache["data"] = None
+                _warm_cache(store)
+                print(
+                    f"[pipeline-lineage] {len(lineage_out.get('narratives', []))} narratives ready"
+                )
+
+            # Bind model and pause background workers so the pipeline
+            # has exclusive GPU access (same pattern as the crawl tick).
+            if _decompose_engine:
+                _decompose_engine.model = model
+                _decompose_engine.tokenizer = tokenizer
+                _decompose_engine.stop()
+                print("[pipeline-loop] paused background decompose workers")
+            if _cogitate_engine:
+                _cogitate_engine.stop()
+                print("[pipeline-loop] paused background cogitate engine")
+
+            _pipeline_running = True
+            loop = asyncio.get_running_loop()
+            stats = await loop.run_in_executor(
+                _pipeline_executor,
+                run_pipeline, model, tokenizer, store,
+                True,  # do_summaries
+                True,  # do_brief
+                0,
+                10,
+                llm_config,
+                _decompose_engine,
+                _on_lineage,
+            )
+
+            # Don't resume background workers — pipeline handles decomposition
+            if _cogitate_engine:
+                _cogitate_engine.start()
+                print("[pipeline-loop] resumed background cogitate engine")
+
+            _data_cache["data"] = None
+            _warm_cache(store)
+            print(
+                f"[pipeline-loop] done: {stats.get('narratives', 0)} narratives, "
+                f"{stats.get('brief_used', 0)} brief articles, "
+                f"{stats.get('summarized', 0)} summaries"
+            )
+            _pipeline_running = False
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            print(f"[pipeline-loop] error: {exc}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            _pipeline_running = False
+            if _decompose_engine:
+                try:
+                    _decompose_engine.start()
+                except Exception:
+                    pass
+            if _cogitate_engine:
+                try:
+                    _cogitate_engine.start()
+                except Exception:
+                    pass
+        # Poll frequently until narratives appear, then relax.
+        current_stats = _data_cache.get("data")
+        narr_val = current_stats.get("narratives", 0) if current_stats else 0
+        narratives_count = len(narr_val) if isinstance(narr_val, list) else int(narr_val)
+        await asyncio.sleep(30 if narratives_count == 0 else interval)
+
+
 def _build(store: FigmentStore, *, force: bool = False) -> dict[str, Any]:
     if not force and _data_cache["data"] is not None:
         return _data_cache["data"]
@@ -177,6 +293,7 @@ def _build(store: FigmentStore, *, force: bool = False) -> dict[str, Any]:
         for f in all_figs
         if f.kind == "article" and f.meta.get("source_id")
     ]
+    roles = [f for f in all_figs if f.kind == "role"]
     narratives = get_narratives(store, all_figs=all_figs)
     derivatives = get_derivatives(store, all_figs=all_figs)
     agenda = source_agenda(store, all_figs=all_figs)
@@ -184,6 +301,7 @@ def _build(store: FigmentStore, *, force: bool = False) -> dict[str, Any]:
     result = {
         "articles": articles,
         "by_id": by_id,
+        "roles": roles,
         "narratives": narratives,
         "derivatives": derivatives,
         "agenda": agenda,
@@ -254,15 +372,9 @@ async def _run_crawl_tick(
     await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
     try:
-        cache_key = model_id
-        if cache_key in _model_cache:
-            model, tokenizer = _model_cache[cache_key]
-            print(f"[crawl] model reused ({model_id.rsplit('/',1)[-1]})")
-        else:
-            model, tokenizer = await asyncio.to_thread(load_model, model_id)
-            _model_cache[cache_key] = (model, tokenizer)
-            _gen_cache["gen"] = FigmentGenerator(model, tokenizer)
-            print(f"[crawl] model loaded ({model_id.rsplit('/',1)[-1]})")
+        already_cached = model_id in _model_cache
+        model, tokenizer = await _load_model_cached(model_id)
+        print(f"[crawl] model {'reused' if already_cached else 'loaded'} ({model_id.rsplit('/',1)[-1]})")
 
         # Bind the local model to the decomposition engine so it can decompose
         # articles using the local model rather than the external LLM.
@@ -271,6 +383,14 @@ async def _run_crawl_tick(
             _decompose_engine.tokenizer = tokenizer
 
         registry = SourceRegistry.load(sources_path)
+
+        # Pause background engines so the crawl has exclusive GPU access
+        if _decompose_engine:
+            _decompose_engine.stop()
+            print("[crawl] paused background decompose workers")
+        if _cogitate_engine:
+            _cogitate_engine.stop()
+            print("[crawl] paused background cogitate engine")
 
         kv_manager = None
         if compute_kv:
@@ -294,17 +414,23 @@ async def _run_crawl_tick(
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
 
         async def _crawl_one_feed(sid: str, uri: str) -> tuple[str, int]:
-            added = await asyncio.to_thread(
-                crawler.crawl_feed, sid, uri, per_feed,
-                since=since, before=before,
+            loop = asyncio.get_running_loop()
+            added = await loop.run_in_executor(
+                _crawl_executor,
+                crawler.crawl_feed, sid, uri, per_feed, since, before,
             )
             return sid, added
 
         async def _crawl_seeds_task() -> int:
-            return await asyncio.to_thread(crawler.crawl_seeds, seeds)
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(_crawl_executor, crawler.crawl_seeds, seeds)
 
-        feed_tasks = [_crawl_one_feed(sid, uri) for sid, uri in feeds.items()]
-        seed_task = _crawl_seeds_task() if seeds else None
+        ASYNC_TIMEOUT = 300  # seconds per feed/seed task (matches tick interval)
+        feed_tasks = [
+            asyncio.wait_for(_crawl_one_feed(sid, uri), timeout=ASYNC_TIMEOUT)
+            for sid, uri in feeds.items()
+        ]
+        seed_task = asyncio.wait_for(_crawl_seeds_task(), timeout=ASYNC_TIMEOUT) if seeds else None
         all_tasks = feed_tasks + ([seed_task] if seed_task else [])
 
         results = await asyncio.gather(*all_tasks, return_exceptions=True)
@@ -313,7 +439,8 @@ async def _run_crawl_tick(
         seeds_added = 0
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                print(f"[crawl] task {i} failed: {result}")
+                sid = list(feeds.keys())[i] if i < len(feeds) else "seeds"
+                print(f"[crawl] {sid} timed out or failed: {result}")
                 continue
             if i < len(feed_tasks):
                 sid, added = result
@@ -384,11 +511,13 @@ async def _run_crawl_tick(
                         break
 
                 try:
-                    got = await asyncio.to_thread(
+                    loop = asyncio.get_running_loop()
+                    got = await loop.run_in_executor(
+                        _crawl_executor,
                         crawler.search_searxng, q,
-                        categories=cfg.categories,
-                        time_range=_normalize_searx_time_range(srch_time_range),
-                        max_results=cfg.max_results, pages=cfg.pages,
+                        cfg.categories,
+                        _normalize_searx_time_range(srch_time_range),
+                        cfg.max_results, cfg.pages,
                     )
                     search_added += got
                 except Exception as exc:
@@ -428,49 +557,32 @@ async def _run_crawl_tick(
         if _crawl_state.get("stop_requested"):
             raise asyncio.CancelledError("Stop requested")
 
-        # ── Phase 3: Pipeline ──────────────────────────────────────────────
-        _crawl_state["current_step"] = "pipeline"
-        _crawl_state["message"] = "Running pipeline (trust, lineage, summaries, brief)..."
-        _crawl_state["progress"] = 0
-        _crawl_state["total"] = 4
-        await _broadcast({"type": "crawl_status", "data": _crawl_state})
-
-        llm_config = LLMConfig.from_sources_json(sources_path)
-        if llm_enabled and llm_config.url:
-            llm_config.enabled = True
-            _crawl_state["message"] = "Running pipeline (trust, lineage, eval, summaries, brief)..."
-            _crawl_state["total"] = 6
-        await _broadcast({"type": "crawl_status", "data": _crawl_state})
-
-        pipe_stats = await asyncio.to_thread(
-            run_pipeline, model, tokenizer, store,
-            do_summaries=summarize, do_brief=True, max_stories=max_stories,
-            max_summaries=10,
-            llm_config=llm_config if llm_enabled and llm_config.url else None,
-            decompose_engine=_decompose_engine,
-        )
-        _crawl_state["progress"] = 4
-        await _broadcast({"type": "crawl_status", "data": _crawl_state})
-
-        stats = {
+        # Phase 3: Pipeline is handled by the background pipeline loop
+        # so the crawl tick returns quickly.  Just drain remaining decompose
+        # entries, warm the cache, and signal the pipeline loop.
+        _data_cache["data"] = None
+        _warm_cache(store)
+        n_narr = len(_build(store)["narratives"])
+        _crawl_state["stats"] = {
             "feeds_added": feeds_added,
             "seeds_added": seeds_added,
             "search_added": search_added,
-            "sources": sorted({sid for sid, _ in [r for r in results if not isinstance(r, Exception) and isinstance(r, tuple)]}),
+            "narratives": n_narr,
         }
-        stats.update(pipe_stats)
-        n_narr = pipe_stats.get("narratives", [])
-        n_narr = len(n_narr) if isinstance(n_narr, list) else n_narr
-        print(f"[crawl] pipeline done — {n_narr} narratives, {pipe_stats.get('edges','')} edges")
-        _crawl_state["stats"] = stats
-        _crawl_state["running"] = False
         _crawl_state["current_step"] = "done"
         _crawl_state["message"] = f"Done: {feeds_added + seeds_added + search_added} new articles, {n_narr} narratives"
-        _data_cache["data"] = None
-        _warm_cache(store)
+        _crawl_state["running"] = False
         print(f"[crawl] tick complete — {feeds_added + seeds_added + search_added} new articles, {n_narr} narratives")
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
+        _first_crawl_done.set()
 
+        if not _pipeline_running:
+            # Background workers would decompose articles WITHOUT cross-article
+            # dedup (each worker has its own local `created` dict). Since the
+            # pipeline runs Phase 1 immediately after the crawl, skip workers.
+            print("[crawl] pipeline handles decomposition — not starting workers")
+        else:
+            print("[crawl] pipeline still running — will not resume workers yet")
     except asyncio.CancelledError:
         _crawl_state["running"] = False
         _crawl_state["continuous"] = False
@@ -485,6 +597,18 @@ async def _run_crawl_tick(
         print(f"[crawl] ERROR: {exc}")
         await _broadcast({"type": "crawl_status", "data": _crawl_state})
         raise
+    finally:
+        # Ensure background workers are always restarted
+        if _decompose_engine:
+            try:
+                _decompose_engine.start()
+            except Exception:
+                pass
+        if _cogitate_engine:
+            try:
+                _cogitate_engine.start()
+            except Exception:
+                pass
 
 
 async def _run_continuous_crawl(
@@ -563,6 +687,11 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     search_idx = get_index(db.replace(".lance", "_fts.db"))
     source_logos = {s.source_id: s.logo_url for s in registry.all() if s.logo_url}
 
+    # Set boundary data log path alongside the store database
+    boundary_log_path = db.replace(".lance", "_boundary_data.jsonl")
+    from ..evaluate import set_boundary_log_path as _set_bp
+    _set_bp(boundary_log_path)
+
     app.state.store = store
     app.state.registry = registry
     
@@ -570,10 +699,13 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     llm_config = LLMConfig.from_sources_json(sources)
     global _decompose_engine, _cogitate_engine
     
-    # Always create engines if LLM URL is configured (enabled/disabled is a UI toggle)
-    if llm_config.url:
-        from ..decompose import DecompositionEngine
+    if llm_config.url and llm_config.enabled:
+        from ..decompose import DecompositionEngine, set_llm_client
         from ..cogitate import CogitationEngine
+        from ..evaluate import LLMClient
+        
+        llm_client = LLMClient(llm_config)
+        set_llm_client(llm_client)
         
         _decompose_engine = DecompositionEngine(llm_config, store)
         _cogitate_engine = CogitationEngine(llm_config, store, interval_hours=0.5)
@@ -587,11 +719,18 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     # ---- Startup/Shutdown Events ----------------------------------------- #
     @app.on_event("startup")
     async def startup_event():
-        global _decompose_engine, _cogitate_engine
-        if _decompose_engine:
-            _decompose_engine.start()
+        global _decompose_engine, _cogitate_engine, _pipeline_task
+        # Don't start background decompose workers yet — the first crawl
+        # tick stops them anyway, and by then zombie threads may already hold
+        # model_lock.  Workers are started after the first tick completes.
         if _cogitate_engine:
             _cogitate_engine.start()
+
+        # Independent pipeline loop: keeps the UI cache fresh even when a crawl
+        # tick is blocked by slow SearXNG/page fetches.
+        _pipeline_task = asyncio.create_task(
+            _run_pipeline_loop(store, sources, interval=300)
+        )
 
         cs = registry.crawler_state
         auto_start = cs.continuous or (search_idx.article_count() < 50)
@@ -616,13 +755,19 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
 
     @app.on_event("shutdown")
     async def shutdown_event():
-        global _decompose_engine, _cogitate_engine
+        global _decompose_engine, _cogitate_engine, _pipeline_task
         _crawl_state["stop_requested"] = True
         _crawl_state["running"] = False
         if _crawl_state.get("task") and not _crawl_state["task"].done():
             _crawl_state["task"].cancel()
             try:
                 await asyncio.wait_for(_crawl_state["task"], timeout=3.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                pass
+        if _pipeline_task and not _pipeline_task.done():
+            _pipeline_task.cancel()
+            try:
+                await asyncio.wait_for(_pipeline_task, timeout=3.0)
             except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
                 pass
         if _decompose_engine:
@@ -752,8 +897,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     @app.get("/api/narratives")
     def api_narratives(page: int = 1, per_page: int = 20, sort: str = "newest"):
         """Get narratives with pagination and sorting."""
-        all_figs = store.all()
-        narrs = get_narratives(store, all_figs=all_figs)
+        narrs = data()["narratives"]
         
         # Apply sorting
         if sort == "newest":
@@ -792,8 +936,8 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         `role` filter: who|what|where|why|how (empty = all roles).
         `range` filter: today|yesterday|last_week|last_month|last_year|all (date range for WHEN).
         """
-        all_figs = store.all()
-        narrs = get_narratives(store, all_figs=all_figs)
+        d = data()
+        narrs = d["narratives"]
 
         # Build narrative_id → member_article_ids mapping
         narrative_members: dict[str, set[str]] = {}
@@ -814,7 +958,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
 
         # Group role figments by (role, normalized_text)
         groups: dict[tuple[str, str], dict[str, Any]] = {}
-        for f in all_figs:
+        for f in d["roles"]:
             r = f.meta.get("role")
             if not r:
                 continue
@@ -837,7 +981,9 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
                     "count": 0,
                     "story_ids": story_ids,
                 }
-            groups[key]["count"] += 1
+            # Use reference_count to capture cross-article role sharing
+            ref_count = f.meta.get("reference_count", 1)
+            groups[key]["count"] += ref_count
             if article_id and story_ids:
                 narrative_members.setdefault(story_ids[0], set())
 
@@ -1063,17 +1209,14 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         max_stories = body.get("max_stories", 0)
         try:
             mid = "unsloth/Qwen3-4B-bnb-4bit"
-            if mid in _model_cache:
-                model, tokenizer = _model_cache[mid]
-            else:
-                model, tokenizer = await asyncio.to_thread(load_model, mid)
-                _model_cache[mid] = (model, tokenizer)
-            stats = await asyncio.to_thread(
+            model, tokenizer = await _load_model_cached(mid)
+            loop = asyncio.get_running_loop()
+            stats = await loop.run_in_executor(
+                _pipeline_executor,
                 run_pipeline, model, tokenizer, store,
-                do_summaries=do_summaries, do_brief=do_brief, max_stories=max_stories,
-                max_summaries=10,
-                llm_config=LLMConfig.from_sources_json(sources),
-                decompose_engine=_decompose_engine,
+                do_summaries, do_brief, max_stories,
+                3,
+                LLMConfig.from_sources_json(sources),
             )
             _data_cache["data"] = None
             _warm_cache(store)
@@ -1092,15 +1235,14 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         top_n = body.get("top_n", 8)
         try:
             mid = "unsloth/Qwen3-4B-bnb-4bit"
-            if mid in _model_cache:
-                model, tokenizer = _model_cache[mid]
-            else:
-                model, tokenizer = await asyncio.to_thread(load_model, mid)
-                _model_cache[mid] = (model, tokenizer)
-            s1 = await asyncio.to_thread(
+            model, tokenizer = await _load_model_cached(mid)
+            loop = asyncio.get_running_loop()
+            s1 = await loop.run_in_executor(
+                _pipeline_executor,
                 summarize_news.ensure_article_summaries, model, tokenizer, store, limit
             )
-            s2 = await asyncio.to_thread(
+            s2 = await loop.run_in_executor(
+                _pipeline_executor,
                 summarize_news.build_world_brief, model, tokenizer, store, top_n
             )
             _data_cache["data"] = None

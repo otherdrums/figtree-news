@@ -95,3 +95,50 @@ def test_lineage_idempotent(tmp_path):
     before = len(store.all())
     lineage_mod.compute_lineage(store)
     assert len(store.all()) == before
+
+
+def _seed_disjoint_narratives(tmp_path):
+    """Two articles with no shared roles → two separate narratives."""
+    store: FigmentStore = connect(str(tmp_path / "news.lance"))
+
+    who_a = _role_figment("who", "Alice", "a1")
+    what_a = _role_figment("what", "Won marathon", "a1")
+    where_a = _role_figment("where", "Boston", "a1")
+    a = _article(
+        "reuters", "Alice won the Boston marathon.",
+        "Mon, 01 Jan 2024 10:00:00 GMT", "http://reuters.com/a", "a1",
+        role_figment_ids=[who_a.figment_id, what_a.figment_id, where_a.figment_id],
+    )
+
+    who_b = _role_figment("who", "Bob", "b1")
+    what_b = _role_figment("what", "Won marathon", "b1")
+    where_b = _role_figment("where", "Chicago", "b1")
+    b = _article(
+        "bbc", "Bob won the Chicago marathon.",
+        "Tue, 02 Jan 2024 10:00:00 GMT", "http://bbc.com/b", "b1",
+        role_figment_ids=[who_b.figment_id, what_b.figment_id, where_b.figment_id],
+    )
+
+    store.upsert([a, b, who_a, what_a, where_a, who_b, what_b, where_b], hidden_size=8)
+    return store
+
+
+def test_merge_narratives_by_llm_labels(tmp_path):
+    store = _seed_disjoint_narratives(tmp_path)
+    out = lineage_mod.compute_lineage(store)
+    assert len(out["narratives"]) == 2
+
+    reporters_before = {n["first_reporter"] for n in out["narratives"]}
+    assert "reuters" in reporters_before
+    assert "bbc" in reporters_before
+
+    labels = [
+        {"a1": "a1", "a2": "b1", "same_event": True, "reason": "Both are marathon winners"},
+    ]
+    merge_out = lineage_mod.merge_narratives_by_llm_labels(store, labels)
+    assert len(merge_out["narratives"]) == 1
+
+    merged = merge_out["narratives"][0]
+    assert "a1" in merged["members"]
+    assert "b1" in merged["members"]
+    assert merged["first_reporter"] == "reuters"

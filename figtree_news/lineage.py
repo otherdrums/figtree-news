@@ -17,6 +17,7 @@ Deterministic ids make the whole step idempotent.
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -32,6 +33,39 @@ def _normalize_source(source_id: str) -> str:
         if source_id.endswith(suffix):
             return source_id[: -len(suffix)]
     return source_id
+
+
+_BOILERPLATE_PATTERNS: list[re.Pattern] = [
+    re.compile(r'subscribe\s+(to|now)', re.I),
+    re.compile(r'download\s+the\s.*app', re.I),
+    re.compile(r'become\s+a\s.*patriot', re.I),
+    re.compile(r'click\s+here', re.I),
+    re.compile(r'watch\s+(more|24/7|247)', re.I),
+    re.compile(r'sign\s+up', re.I),
+    re.compile(r'newsletter', re.I),
+    re.compile(r'licensing@', re.I),
+    re.compile(r'all rights reserved', re.I),
+    re.compile(r'fox news channel \(fnc\)|fnc is', re.I),
+    re.compile(r'ms\s+now', re.I),
+    re.compile(r'my\s+source\s+for\s+news', re.I),
+    re.compile(r'cbs news 24.?7', re.I),
+    re.compile(r'available for archive', re.I),
+    re.compile(r'by emailing', re.I),
+    re.compile(r'©', re.I),
+    re.compile(r'be part of it', re.I),
+    re.compile(r'touch to listen to cbs news', re.I),
+]
+
+
+def _is_boilerplate(text: str) -> bool:
+    lower = text.lower()
+    for pat in _BOILERPLATE_PATTERNS:
+        if pat.search(lower):
+            return True
+    url_chars = sum(1 for c in text if c in ':/?#[]@!$&()*+,;=')
+    if len(text) > 20 and url_chars / max(len(text), 1) > 0.15:
+        return True
+    return False
 
 
 def _parse_time(fig: Figment) -> datetime | None:
@@ -68,14 +102,16 @@ def _cluster_by_roles(
     """Cluster articles by shared role figments.
 
     Two articles share a narrative if they share >= min_shared role figment IDs.
-    Role figments are deduplicated by hash(role + normalized_text), so sharing
-    a role figment ID means semantic identity.
+    Role figments are deduplicated by boundary cosine similarity (>= 0.90)
+    plus exact text match, so sharing a role figment ID means semantic identity.
 
     When ``expand_associations`` is True and ``store`` is provided, each role
     figment is expanded through association edges so that surface-form variants
     (e.g. "Trump", "Donald Trump", "DJT") are treated as the same linking node.
 
     Articles without role figments (not yet decomposed) are left as singletons.
+    The LLM-based split step (``split_narratives_by_llm_labels``) is the safety
+    net for false positives from a low ``min_shared``.
     """
     # Build association groups once when expanding.
     assoc_groups: dict[str, set[str]] = {}
@@ -100,6 +136,49 @@ def _cluster_by_roles(
                     expanded.add(rid)
             role_ids = expanded
         article_roles[f.figment_id] = role_ids
+
+    # ── Role filtering ────────────────────────────────────────────────────
+    # Build role DF and fetch role figment texts for boilerplate/self-ref checks.
+    role_df: dict[str, int] = {}
+    for roles in article_roles.values():
+        for rid in roles:
+            role_df[rid] = role_df.get(rid, 0) + 1
+
+    source_name_map: dict[str, str] = {}
+    for f in articles:
+        sid = (f.meta.get("source_id") or "").replace("_", " ").replace("-", " ").lower().strip()
+        source_name_map[f.figment_id] = sid
+
+    role_text: dict[str, str] = {}
+    if store is not None:
+        try:
+            all_figs = store.all()
+            for f in all_figs:
+                rid = f.figment_id
+                if rid in role_df:
+                    role_text[rid] = f.text or ""
+        except Exception:
+            pass
+
+    n_articles = len(articles)
+    df_threshold = max(5, int(0.20 * n_articles))
+
+    for aid in list(article_roles.keys()):
+        filtered: set[str] = set()
+        src_name = source_name_map.get(aid, "")
+        for rid in article_roles[aid]:
+            # high document frequency → generic/bridge role
+            if role_df.get(rid, 0) > df_threshold:
+                continue
+            # self‑referential: role text names the source itself
+            rtext = role_text.get(rid, "")
+            if src_name and rtext and src_name in rtext.lower():
+                continue
+            # boilerplate pattern match on role text
+            if _is_boilerplate(rtext):
+                continue
+            filtered.add(rid)
+        article_roles[aid] = filtered
 
     parent = {f.figment_id: f.figment_id for f in articles}
 
@@ -136,15 +215,20 @@ def _cluster_by_roles(
     return list(groups.values())
 
 
-def _cluster_by_boundary(articles: list[Figment], threshold: float = 0.95, hours: int = 48) -> list[list[Figment]]:
+def _cluster_by_boundary(articles: list[Figment], threshold: float = 0.98, hours: int = 48) -> list[list[Figment]]:
     """Fallback: cluster by boundary cosine similarity within time window.
 
     Used only when no role figments exist (external LLM not configured).
+    Boundary vectors are unreliable for very short snippets (e.g. YouTube
+    video descriptions), so we require a minimum text length on both articles.
     Threshold is tunable — start conservative (0.95) and adjust based on results.
     """
     by_id = {f.figment_id: f for f in articles}
     times = {f.figment_id: _parse_time(f) for f in articles}
     parent = {f.figment_id: f.figment_id for f in articles}
+
+    def _text_len(f: Figment) -> int:
+        return len((f.meta.get("title") or f.text or "").strip())
 
     def find(x):
         while parent[x] != x:
@@ -173,6 +257,9 @@ def _cluster_by_boundary(articles: list[Figment], threshold: float = 0.95, hours
         for j in range(i + 1, len(fids)):
             a, b = fids[i], fids[j]
             if find(a) == find(b):
+                continue
+            # Skip short snippets; boundary vectors are not discriminative enough
+            if _text_len(by_id[a]) < 120 or _text_len(by_id[b]) < 120:
                 continue
             h = _hours_apart(a, b)
             if h is not None and h <= hours:
@@ -248,14 +335,17 @@ def _singleton_narrative(article: Figment) -> tuple[Figment, dict[str, Any]]:
     return narrative, summary
 
 
-def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]:
+def compute_lineage(store: FigmentStore, max_stories: int = 0, all_figs: list | None = None) -> dict[str, Any]:
     """Recompute lineage figments from the current store. Idempotent.
 
-    Uses role figment clustering when available, boundary fallback otherwise.
-    If clustering or persistence fails, falls back to one narrative per article
-    so the UI always has stories to render.
+    Uses role figment clustering when available. When no roles exist (articles
+    not yet decomposed), falls back to one narrative per article — the external
+    LLM phases (Phase 2c, Phase 4b) handle merging via semantic evaluation.
+
+    Boundary similarity is NOT used for clustering decisions. It is recorded
+    separately for data-collection purposes (see ``boundary_data.jsonl``).
     """
-    all_figs = store.all()
+    all_figs = all_figs if all_figs is not None else store.all()
     for f in all_figs:
         if f.meta.get("edge_type") in ("narrative", "derivative"):
             store.delete(f.figment_id)
@@ -263,14 +353,15 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0) -> dict[str, Any]
     articles = _articles(store, all_figs=all_figs)
 
     has_roles = _has_role_figments(articles)
-    print(f"\n[lineage] Clustering {len(articles)} articles...")
+    print(f"\n[lineage] {len(articles)} articles, has_roles={has_roles}")
 
     if has_roles:
         print("[lineage]   Using role figment clustering")
         clusters = _cluster_by_roles(store, articles)
     else:
-        print("[lineage]   No role figments — using boundary similarity fallback")
-        clusters = _cluster_by_boundary(articles)
+        # No boundary fallback — create singletons and let the LLM merge them.
+        print("[lineage]   No role figments — creating singletons (LLM will merge)")
+        clusters = [[a] for a in articles]
 
     print(f"[lineage]   {len(clusters)} clusters")
 
@@ -504,3 +595,307 @@ def assign_roles_to_narratives(store: FigmentStore, *, all_figs: list | None = N
             store.upsert([f], hidden_size=f.boundary.shape[0])
             updated += 1
     return updated
+
+
+def _rebuild_narrative_from_articles(
+    articles: list[Figment],
+    old_narratives: list[Figment],
+    *,
+    suffix: str = "",
+) -> tuple[Figment, list[Figment], dict[str, Any]]:
+    """Build a new narrative figment and derivative edges from a set of articles.
+
+    ``old_narratives`` is used to preserve the earliest ``first_seen`` timestamp.
+    Returns (narrative_figment, list_of_derivative_edges, summary_dict).
+    """
+    if not articles:
+        raise ValueError("articles must not be empty")
+    articles = sorted(
+        articles,
+        key=lambda f: _parse_time(f) or datetime.max.replace(tzinfo=timezone.utc),
+    )
+    first = articles[0]
+    sources = sorted({_normalize_source(f.meta.get("source_id", "unknown")) for f in articles})
+    members = [f.figment_id for f in articles]
+    key = hashlib.sha1("|".join(members).encode()).hexdigest()[:12]
+    narrative_id = f"narrative:{key}{suffix}"
+
+    title = first.meta.get("title") or first.text.split(".")[0].strip()
+    times = [(_parse_time(f), f) for f in articles]
+    latest_time = max((t for t, _ in times if t), default=None)
+    latest_iso = latest_time.isoformat() if latest_time else ""
+    now_utc = datetime.now(timezone.utc)
+    first_seen = min(
+        (nf.meta.get("first_seen") or now_utc.isoformat() for nf in old_narratives if nf),
+        default=now_utc.isoformat(),
+    )
+    new_count = sum(1 for t, _ in times if t and t >= now_utc - timedelta(days=1))
+
+    derivatives: list[Figment] = []
+    for f in articles[1:]:
+        deriv_id = f"deriv:{first.figment_id}:{f.figment_id}"
+        deriv = Figment.create(
+            text=f"{f.meta.get('source_id', 'unknown')} echoed a story first reported by {first.meta.get('source_id', 'unknown')}",
+            boundary=first.boundary.copy(),
+            meta={
+                "edge_type": "derivative",
+                "original": first.figment_id,
+                "original_url": first.meta.get("url"),
+                "derivative": f.figment_id,
+                "derivative_url": f.meta.get("url"),
+            },
+            figment_id=deriv_id,
+            sources=[first.figment_id],
+            children=[f.figment_id],
+            kind="edge",
+        )
+        derivatives.append(deriv)
+        f.meta["derivative_of"] = first.figment_id
+
+    narrative = Figment.create(
+        text=title,
+        boundary=first.boundary.copy(),
+        meta={
+            "edge_type": "narrative",
+            "title": title,
+            "members": members,
+            "sources": sources,
+            "first_reporter": first.figment_id,
+            "first_reporter_source": first.meta.get("source_id"),
+            "first_reporter_url": first.meta.get("url"),
+            "entities": [],
+            "frame_shift": False,
+            "frame_shift_score": None,
+            "frame_shift_note": "",
+            "latest_article_date": latest_iso,
+            "first_seen": first_seen,
+            "last_updated": latest_iso,
+            "new_article_count": new_count,
+        },
+        figment_id=narrative_id,
+        kind="edge",
+    )
+    summary = {
+        "narrative_id": narrative_id,
+        "title": title,
+        "sources": sources,
+        "members": members,
+        "first_reporter": first.meta.get("source_id"),
+        "first_reporter_url": first.meta.get("url"),
+        "entities": [],
+        "text": title,
+        "frame_shift": False,
+        "frame_shift_score": None,
+        "frame_shift_note": "",
+        "latest_article_date": latest_iso,
+        "first_seen": first_seen,
+        "last_updated": latest_iso,
+        "new_article_count": new_count,
+    }
+    return narrative, derivatives, summary
+
+
+def merge_narratives_by_llm_labels(
+    store: FigmentStore,
+    labels: list[dict[str, Any]],
+    *,
+    all_figs: list | None = None,
+) -> dict[str, Any]:
+    """Merge existing narrative clusters when the LLM says two articles are same-event.
+
+    Operates on the narrative figments already persisted by ``compute_lineage``.
+    For every label with ``same_event=True``, find the narratives containing the
+    two articles and union them into a single narrative. Old narratives are
+    deleted and replaced with merged ones.
+
+    Returns the merged narrative summaries in the same shape as
+    ``compute_lineage`` (``{"narratives": [...], "edges": int}``).
+    """
+    figs = all_figs if all_figs is not None else store.all()
+    narr_figs = [f for f in figs if f.meta.get("edge_type") == "narrative"]
+    if not narr_figs or not labels:
+        return {"narratives": [], "edges": 0}
+
+    by_id = {f.figment_id: f for f in figs}
+    article_to_narrative: dict[str, str] = {}
+    for nf in narr_figs:
+        for mid in nf.meta.get("members", []):
+            article_to_narrative[mid] = nf.figment_id
+
+    parent = {nf.figment_id: nf.figment_id for nf in narr_figs}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    merges = 0
+    for label in labels:
+        if not label.get("same_event"):
+            continue
+        a1 = label.get("a1")
+        a2 = label.get("a2")
+        if not a1 or not a2:
+            continue
+        n1 = article_to_narrative.get(a1)
+        n2 = article_to_narrative.get(a2)
+        if n1 and n2 and n1 != n2:
+            union(n1, n2)
+            merges += 1
+
+    if merges == 0:
+        return {"narratives": [], "edges": 0}
+
+    groups: dict[str, list[Figment]] = {}
+    for nf in narr_figs:
+        groups.setdefault(find(nf.figment_id), []).append(nf)
+
+    hidden_size = narr_figs[0].boundary.shape[0]
+    new_narratives: list[Figment] = []
+    new_derivatives: list[Figment] = []
+    merged_summaries: list[dict[str, Any]] = []
+    all_affected_articles: list[Figment] = []
+
+    for root, group in groups.items():
+        if len(group) == 1:
+            continue
+        member_ids: list[str] = []
+        for nf in group:
+            member_ids.extend(nf.meta.get("members", []))
+        member_ids = sorted(set(member_ids))
+        if len(member_ids) < 2:
+            continue
+
+        group_articles = [by_id[mid] for mid in member_ids if mid in by_id]
+        if not group_articles:
+            continue
+
+        for nf in group:
+            store.delete(nf.figment_id)
+
+        narrative, derivatives, summary = _rebuild_narrative_from_articles(
+            group_articles, group
+        )
+        new_narratives.append(narrative)
+        new_derivatives.extend(derivatives)
+        merged_summaries.append(summary)
+        all_affected_articles.extend(group_articles)
+
+    if new_narratives:
+        store.upsert(new_narratives, hidden_size=hidden_size)
+    if new_derivatives:
+        store.upsert(new_derivatives, hidden_size=hidden_size)
+    if all_affected_articles:
+        store.upsert(all_affected_articles, hidden_size=hidden_size)
+
+    deleted_count = sum(len(g) for g in groups.values() if len(g) > 1)
+    print(f"[lineage] LLM merge: {len(merged_summaries)} merged narratives from {deleted_count} originals")
+    return {
+        "narratives": merged_summaries,
+        "edges": len(new_derivatives),
+    }
+
+
+def split_narratives_by_llm_labels(
+    store: FigmentStore,
+    labels: list[dict[str, Any]],
+    *,
+    all_figs: list | None = None,
+) -> dict[str, Any]:
+    """Split existing narrative clusters when the LLM says two articles are different events.
+
+    Operates on the narrative figments already persisted by ``compute_lineage``.
+    For every label with ``same_event=False``, if the two articles currently live
+    in the same narrative, that narrative is dissolved and each article becomes
+    its own single-article narrative. This is the primary defense against the
+    boundary-similarity fallback clustering unrelated short snippets.
+
+    Returns the split narrative summaries in the same shape as
+    ``compute_lineage`` (``{"narratives": [...], "edges": int}``).
+    """
+    figs = all_figs if all_figs is not None else store.all()
+    narr_figs = [f for f in figs if f.meta.get("edge_type") == "narrative"]
+    if not narr_figs or not labels:
+        return {"narratives": [], "edges": 0}
+
+    by_id = {f.figment_id: f for f in figs}
+    article_to_narrative: dict[str, str] = {}
+    for nf in narr_figs:
+        for mid in nf.meta.get("members", []):
+            article_to_narrative[mid] = nf.figment_id
+
+    # Find which narratives need to be split because of a different-event label
+    split_narrative_ids: set[str] = set()
+    for label in labels:
+        if label.get("same_event"):
+            continue
+        a1 = label.get("a1")
+        a2 = label.get("a2")
+        if not a1 or not a2:
+            continue
+        n1 = article_to_narrative.get(a1)
+        n2 = article_to_narrative.get(a2)
+        if n1 and n2 and n1 == n2:
+            split_narrative_ids.add(n1)
+
+    if not split_narrative_ids:
+        return {"narratives": [], "edges": 0}
+
+    hidden_size = narr_figs[0].boundary.shape[0]
+    new_narratives: list[Figment] = []
+    new_derivatives: list[Figment] = []
+    split_summaries: list[dict[str, Any]] = []
+    all_affected_articles: list[Figment] = []
+    member_ids_set = {mid for nf in narr_figs for mid in nf.meta.get("members", [])}
+
+    for nf in narr_figs:
+        if nf.figment_id not in split_narrative_ids:
+            continue
+        member_ids = nf.meta.get("members", [])
+        nf_articles = [by_id[mid] for mid in member_ids if mid in by_id]
+        if len(nf_articles) < 2:
+            continue
+
+        # Clear derivative_of from members so they can stand alone
+        for art in nf_articles:
+            art.meta.pop("derivative_of", None)
+
+        store.delete(nf.figment_id)
+        # Delete derivative edges where both original AND derivative belong
+        # to this dissolved narrative (over-broad deletion was the bug).
+        for df in figs:
+            if df.meta.get("edge_type") != "derivative":
+                continue
+            orig = df.meta.get("original")
+            deriv = df.meta.get("derivative")
+            if orig in member_ids_set and deriv in member_ids_set:
+                store.delete(df.figment_id)
+
+        for art in nf_articles:
+            narrative, derivatives, summary = _rebuild_narrative_from_articles(
+                [art], [nf]
+            )
+            new_narratives.append(narrative)
+            new_derivatives.extend(derivatives)
+            split_summaries.append(summary)
+
+        all_affected_articles.extend(nf_articles)
+
+    if new_narratives:
+        store.upsert(new_narratives, hidden_size=hidden_size)
+    if new_derivatives:
+        store.upsert(new_derivatives, hidden_size=hidden_size)
+    if all_affected_articles:
+        store.upsert(all_affected_articles, hidden_size=hidden_size)
+
+    print(f"[lineage] LLM split: dissolved {len(deleted_narrative_ids)} bad narratives into {len(split_summaries)} single-article narratives")
+    return {
+        "narratives": split_summaries,
+        "edges": len(new_derivatives),
+    }

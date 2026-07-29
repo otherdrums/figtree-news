@@ -22,7 +22,8 @@ class LLMConfig:
     auto_correct: bool = True
     confirmation_threshold: int = 2
     find_missed_merges: bool = True
-    missed_merge_interval: int = 10
+    missed_merge_interval: int = 1
+    decompose: bool = True  # use external LLM for role extraction + dedup
 
     @classmethod
     def from_sources_json(cls, path: str) -> "LLMConfig":
@@ -46,4 +47,5 @@ class LLMConfig:
             confirmation_threshold=int(llm.get("confirmation_threshold", 2)),
             find_missed_merges=bool(llm.get("find_missed_merges", True)),
             missed_merge_interval=int(llm.get("missed_merge_interval", 10)),
+            decompose=bool(llm.get("decompose", True)),
         )

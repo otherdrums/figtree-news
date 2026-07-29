@@ -364,6 +364,171 @@ def eval_cmd(
     typer.echo(f"wrote {out}")
 
 
+@app.command("boundary-threshold")
+def boundary_threshold_cmd(
+    db: str = typer.Option("./news.lance"),
+    log: str = typer.Option("", "--log", help="Path to boundary_data.jsonl (default: derived from db)"),
+    thresholds: str = typer.Option("0.80,0.85,0.90,0.95,0.98", "--thresholds", help="Comma-separated thresholds to evaluate"),
+):
+    """Analyze boundary cosine data collected from LLM pair evaluations.
+
+    Reads the JSONL log of boundary comparisons (a1_id, a2_id, boundary_cos,
+    llm_verdict) and prints distribution statistics and threshold quality metrics.
+    """
+    import json, math, statistics
+    from collections import Counter
+
+    path = log if log else db.replace(".lance", "_boundary_data.jsonl")
+    if not os.path.exists(path):
+        typer.echo(f"Boundary data not found at: {path}")
+        typer.echo("Run the pipeline with LLM evaluation enabled to collect data.")
+        raise typer.Exit(1)
+
+    records = []
+    with open(path, "r") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+
+    if not records:
+        typer.echo("No boundary comparison records found.")
+        raise typer.Exit(0)
+
+    same = [r for r in records if r.get("llm_verdict") is True]
+    diff = [r for r in records if r.get("llm_verdict") is False]
+    unknown = [r for r in records if r.get("llm_verdict") is None]
+
+    typer.echo(f"\n{'='*60}")
+    typer.echo(f"Boundary Comparison Analysis")
+    typer.echo(f"{'='*60}")
+    typer.echo(f"  Total records:      {len(records)}")
+    typer.echo(f"  Same-event (merge): {len(same)}")
+    typer.echo(f"  Different-event:    {len(diff)}")
+    typer.echo(f"  Unknown:            {len(unknown)}")
+
+    if same:
+        same_cos = [r["boundary_cos"] for r in same]
+        typer.echo(f"\n  SAME-EVENT boundary cosine:")
+        typer.echo(f"    Mean:   {statistics.mean(same_cos):.4f}")
+        typer.echo(f"    Median: {statistics.median(same_cos):.4f}")
+        if len(same_cos) > 1:
+            typer.echo(f"    Stdev:  {statistics.stdev(same_cos):.4f}")
+        typer.echo(f"    Min:    {min(same_cos):.4f}")
+        typer.echo(f"    Max:    {max(same_cos):.4f}")
+
+    if diff:
+        diff_cos = [r["boundary_cos"] for r in diff]
+        typer.echo(f"\n  DIFFERENT-EVENT boundary cosine:")
+        typer.echo(f"    Mean:   {statistics.mean(diff_cos):.4f}")
+        typer.echo(f"    Median: {statistics.median(diff_cos):.4f}")
+        if len(diff_cos) > 1:
+            typer.echo(f"    Stdev:  {statistics.stdev(diff_cos):.4f}")
+        typer.echo(f"    Min:    {min(diff_cos):.4f}")
+        typer.echo(f"    Max:    {max(diff_cos):.4f}")
+
+    typer.echo(f"\n  {'='*50}")
+    typer.echo(f"  Threshold Quality (if used as boundary fallback)")
+    typer.echo(f"  {'='*50}")
+
+    # Source diversity
+    source_pairs = Counter()
+    for r in records:
+        pair = tuple(sorted([r.get("source1","?"), r.get("source2","?")]))
+        source_pairs[pair] += 1
+    same_source = sum(c for p, c in source_pairs.items() if p[0] == p[1])
+    cross_source = sum(c for p, c in source_pairs.items() if p[0] != p[1])
+    typer.echo(f"  Same-source pairs:  {same_source}")
+    typer.echo(f"  Cross-source pairs: {cross_source}")
+
+    threshold_list = [float(t.strip()) for t in thresholds.split(",") if t.strip()]
+    typer.echo(f"\n  {'Threshold':>10s}  {'Precision':>10s}  {'Recall':>10s}  {'F1':>10s}  {'TP':>5s}  {'FP':>5s}  {'FN':>5s}")
+    typer.echo(f"  {'-'*10}  {'-'*10}  {'-'*10}  {'-'*10}  {'-'*5}  {'-'*5}  {'-'*5}")
+    for t in threshold_list:
+        tp = sum(1 for r in same if r["boundary_cos"] >= t)
+        fn = len(same) - tp
+        fp = sum(1 for r in diff if r["boundary_cos"] >= t)
+        tn = len(diff) - fp
+        prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+        typer.echo(f"  {t:>10.2f}  {prec:>10.4f}  {rec:>10.4f}  {f1:>10.4f}  {tp:>5d}  {fp:>5d}  {fn:>5d}")
+
+    typer.echo(f"\n  Best F1 threshold: ", nl=False)
+    best_t, best_f1 = threshold_list[0], 0.0
+    for t in threshold_list:
+        tp = sum(1 for r in same if r["boundary_cos"] >= t)
+        fn = len(same) - tp
+        fp = sum(1 for r in diff if r["boundary_cos"] >= t)
+        tn = len(diff) - fp
+        prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+        if f1 > best_f1:
+            best_f1 = f1
+            best_t = t
+    typer.echo(f"threshold={best_t:.2f}  F1={best_f1:.4f}")
+
+    # Also show origin breakdown
+    origins = Counter(r.get("origin", "?") for r in records)
+    typer.echo(f"\n  Origin breakdown:")
+    for origin, count in origins.most_common():
+        typer.echo(f"    {origin:25s}: {count}")
+
+
+@app.command("purge-derived")
+def purge_derived_cmd(
+    db: str = typer.Option("./news.lance"),
+    sources: str = typer.Option(str(Path(__file__).parent.parent / "demo/sources.json")),
+):
+    """Delete role, narrative, dedup_obs, brief figments; clear article meta.
+
+    Leaves crawled articles, summaries, and text intact.
+    """
+    from figtree import FigmentStore
+    store = FigmentStore(db)
+    all_figs = store.all()
+    to_delete: list[str] = []
+    articles_changed: list[Figment] = []
+    kinds_seen: dict[str, int] = {}
+    for f in all_figs:
+        kinds_seen[f.kind] = kinds_seen.get(f.kind, 0) + 1
+        if f.kind in ("role", "narrative", "dedup_obs", "edge"):
+            to_delete.append(f.figment_id)
+        elif f.kind == "article":
+            if f.meta.get("role_figments") or f.meta.get("decomposed"):
+                f.meta["role_figments"] = []
+                f.meta["decomposed"] = False
+                # Also clear sentence/paragraph children role refs
+                f.children = [c for c in (f.children or [])]
+                articles_changed.append(f)
+    # Also delete world brief figment
+    for f in all_figs:
+        if f.kind == "brief":
+            to_delete.append(f.figment_id)
+    # Also clear role_figments on paragraphs/sentences
+    for f in all_figs:
+        if f.kind in ("paragraph", "sentence") and f.meta.get("role_figments"):
+            f.meta["role_figments"] = []
+            f.meta["decomposed"] = False
+            articles_changed.append(f)
+    typer.echo(f"Current figments by kind: {dict(sorted(kinds_seen.items()))}")
+    typer.echo(f"Deleting {len(to_delete)} derived figments")
+    typer.echo(f"Clearing decomposed status on {len(articles_changed)} articles/paragraphs/sentences")
+    for fid in to_delete:
+        try:
+            store.delete(fid)
+        except Exception as exc:
+            typer.echo(f"  delete {fid[:12]}: {exc}")
+    if articles_changed:
+        hidden = articles_changed[0].boundary.shape[0]
+        store.upsert(articles_changed, hidden_size=hidden)
+    typer.echo("Done. Next: restart the server and the pipeline will re-decompose all articles.")
+
+
 @app.command("serve")
 def serve_cmd(
     db: str = typer.Option("./news.lance"),

@@ -30,23 +30,36 @@ def ensure_article_summaries(
     gen = FigmentGenerator(model, tokenizer)
     done = 0
     updated: list[Figment] = []
-    for f in _article_images(store, all_figs=all_figs):
+    articles = _article_images(store, all_figs=all_figs)
+    total_pending = sum(1 for f in articles if not f.meta.get("summary"))
+    print(f"[summarize] {total_pending} articles pending summary (limit={limit})")
+    for f in articles:
         if f.meta.get("summary"):
             continue
+        title = (f.meta.get("title") or f.text or "")[:40]
+        # Aggressive VRAM guard: skip summarizing this article if the GPU is
+        # already tight. The article can still be rendered from its title/text.
+        import torch
+        if torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info()
+            free_mb = free // (1024 * 1024)
+            print(f"[summarize] ({done+1}/{total_pending}) VRAM={free_mb}MB — \"{title}\"")
+            if free_mb < 150:
+                print(f"[summarize] VRAM low ({free_mb}MB free) — skipping remaining summaries")
+                break
         with model_lock:
             result = gen.generate(
-                [f], "Summarize the above article in 2-3 concise sentences.", max_new_tokens=96
+                [f], "Summarize the above article in 1-2 concise sentences.", max_new_tokens=48
             )
         f.meta["summary"] = result.get("generated_text", "").strip()
         updated.append(f)
         done += 1
-        
-        # Clear GPU cache every 5 summaries to prevent OOM on low-VRAM GPUs
-        if done % 5 == 0:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        
+
+        # Clear GPU cache after every summary on a 3-4 GB card
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+
         if done >= limit:
             break
     if updated:

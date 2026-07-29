@@ -133,9 +133,10 @@
   },
   "llm": {
     "url": "http://192.168.10.222:8081/v1",
-    "model": "qwen-3.6",
+    "model": "./models/Qwen3.6-35B-A3B-Q4/Qwen3.6-35B-A3B-Q4_K_M.gguf",
     "timeout": 120,
     "enabled": true,
+    "decompose": true,
     "evaluate_clusters": true,
     "verify_frame_shifts": true,
     "review_brief": true,

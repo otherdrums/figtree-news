@@ -211,9 +211,10 @@ def ingest_articles(
     ``stamp_provenance`` is True (default), ``url``/``published``/``title`` are
     attached to every resulting figment and re-persisted.
 
-    Returns a small stats dict (article/figment counts, sources touched, urls).
+    Returns a small stats dict (article/figment counts, sources touched, urls,
+    article_ids).
     """
-    stats = {"articles": 0, "figments": 0, "sources": set(), "urls": []}
+    stats = {"articles": 0, "figments": 0, "sources": set(), "urls": [], "article_ids": []}
     for art in articles:
         sid = art["source_id"]
         text = art["text"]
@@ -266,6 +267,7 @@ def ingest_articles(
         stats["articles"] += 1
         stats["figments"] += len(figments)
         stats["sources"].add(sid)
+        stats["article_ids"].append(image_fig.figment_id)
         if art.get("url"):
             stats["urls"].append(art["url"])
     stats["sources"] = sorted(stats["sources"])

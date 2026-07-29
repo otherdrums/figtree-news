@@ -66,27 +66,29 @@ class CogitationEngine:
         print("\n[cogitate] Starting consolidation phase...")
         
         loop = asyncio.get_event_loop()
+        all_figments = self.store.all()
         
-        merged = await loop.run_in_executor(None, self._merge_duplicates_sync)
+        merged = await loop.run_in_executor(None, self._merge_duplicates_sync, all_figments)
         print(f"[cogitate]   Merged {merged} duplicate figments")
         
-        relationships = await loop.run_in_executor(None, self._discover_links_sync)
+        relationships = await loop.run_in_executor(None, self._discover_links_sync, all_figments)
         print(f"[cogitate]   Discovered {relationships} new relationships")
         
         strengthened = await loop.run_in_executor(None, self._strengthen_patterns_sync)
         print(f"[cogitate]   Strengthened {strengthened} patterns")
         
-        pruned = await loop.run_in_executor(None, self._prune_weak_links_sync)
+        pruned = await loop.run_in_executor(None, self._prune_weak_links_sync, all_figments)
         print(f"[cogitate]   Pruned {pruned} weak links")
         
-        insights = await self.generate_insights()
+        insights = await self.generate_insights(all_figments=all_figments)
         print(f"[cogitate]   Generated {insights} insights")
         
         print("[cogitate] Consolidation complete\n")
 
-    def _merge_duplicates_sync(self) -> int:
+    def _merge_duplicates_sync(self, all_figments: list | None = None) -> int:
         """Synchronous version of merge_duplicates for thread pool."""
-        all_figments = self.store.all()
+        if all_figments is None:
+            all_figments = self.store.all()
         role_groups = {}
 
         for fig in all_figments:
@@ -111,11 +113,13 @@ class CogitationEngine:
 
         return merged_count
 
-    def _discover_links_sync(self) -> int:
+    def _discover_links_sync(self, all_figments: list | None = None) -> int:
         """Synchronous version of discover_links for thread pool."""
+        if all_figments is None:
+            all_figments = self.store.all()
         cooccurrence = {}
         
-        for article in self.store.all():
+        for article in all_figments:
             if article.kind != "article":
                 continue
             
@@ -160,9 +164,11 @@ class CogitationEngine:
     def _strengthen_patterns_sync(self) -> int:
         return 0
 
-    def _prune_weak_links_sync(self) -> int:
+    def _prune_weak_links_sync(self, all_figments: list | None = None) -> int:
+        if all_figments is None:
+            all_figments = self.store.all()
         pruned = 0
-        for fig in self.store.all():
+        for fig in all_figments:
             if not fig.meta.get('role'):
                 continue
             if fig.meta.get('reference_count', 0) == 0:
@@ -243,7 +249,7 @@ class CogitationEngine:
 
         print(f"[cogitate]   Merged {duplicate.figment_id[:8]} into {canonical.figment_id[:8]}")
     
-    async def generate_insights(self) -> int:
+    async def generate_insights(self, all_figments: list | None = None) -> int:
         """Use LLM to analyze patterns and generate insights."""
         if not self.llm_config.url:
             return 0
@@ -251,13 +257,14 @@ class CogitationEngine:
         from .evaluate import LLMClient
         client = LLMClient(self.llm_config)
         
-        all_figments = self.store.all()
+        if all_figments is None:
+            all_figments = self.store.all()
         role_figments = [f for f in all_figments if f.meta.get('role')]
         
         stats = {
             'total_role_figments': len(role_figments),
             'most_referenced': self._get_most_referenced(role_figments, limit=10),
-            'cooccurrence_patterns': self._get_top_cooccurrences(limit=5)
+            'cooccurrence_patterns': self._get_top_cooccurrences(all_figments=all_figments, limit=5)
         }
         
         prompt = f"""Analyze these patterns and generate 3-5 insights about the news landscape:
@@ -329,10 +336,11 @@ Respond with ONLY valid JSON:
             for f in sorted_figs[:limit]
         ]
     
-    def _get_top_cooccurrences(self, limit: int) -> list[dict]:
+    def _get_top_cooccurrences(self, limit: int, all_figments: list | None = None) -> list[dict]:
         """Get top co-occurrence relationships."""
-        all_figs = self.store.all()
-        relationships = [f for f in all_figs if f.meta.get('edge_type') == 'relationship']
+        if all_figments is None:
+            all_figments = self.store.all()
+        relationships = [f for f in all_figments if f.meta.get('edge_type') == 'relationship']
         
         sorted_rels = sorted(
             relationships,

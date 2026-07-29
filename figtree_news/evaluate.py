@@ -22,13 +22,62 @@ from figtree import Figment, FigmentStore
 
 from .llm_config import LLMConfig
 
+_BOUNDARY_LOG_PATH: str | None = None
+
+def set_boundary_log_path(path: str):
+    global _BOUNDARY_LOG_PATH
+    _BOUNDARY_LOG_PATH = path
+
+def log_boundary_comparison(
+    a1_id: str, a2_id: str,
+    source1: str, source2: str,
+    title1: str, title2: str,
+    boundary_cos: float,
+    llm_verdict: bool,
+    llm_reason: str,
+    origin: str = "label_pairs",
+):
+    """Append one boundary comparison record to the JSONL log file."""
+    import json, os
+    path = _BOUNDARY_LOG_PATH or os.environ.get("FIGTREE_BOUNDARY_LOG", "boundary_data.jsonl")
+    record = {
+        "a1_id": a1_id, "a2_id": a2_id,
+        "source1": source1, "source2": source2,
+        "title1": title1, "title2": title2,
+        "boundary_cos": round(boundary_cos, 6),
+        "llm_verdict": llm_verdict,
+        "llm_reason": llm_reason,
+        "origin": origin,
+    }
+    try:
+        with open(path, "a") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except Exception:
+        pass
+
+
+def _boundary_cos(a: np.ndarray | None, b: np.ndarray | None) -> float | None:
+    if a is None or b is None:
+        return None
+    a_f = a.ravel().astype(np.float64)
+    b_f = b.ravel().astype(np.float64)
+    denom = np.linalg.norm(a_f) * np.linalg.norm(b_f)
+    if denom < 1e-10:
+        return None
+    return float(np.dot(a_f, b_f) / denom)
+
 
 class LLMClient:
     def __init__(self, config: LLMConfig):
         self._url = config.url.rstrip("/")
-        if not self._url.endswith("/v1/chat/completions"):
-            if "/v1" not in self._url:
-                self._url += "/v1/chat/completions"
+        if self._url.endswith("/v1/chat/completions"):
+            pass
+        elif self._url.endswith("/v1"):
+            self._url = self._url[: -len("/v1")] + "/v1/chat/completions"
+        elif "/v1" in self._url:
+            self._url = self._url.rsplit("/v1", 1)[0] + "/v1/chat/completions"
+        else:
+            self._url += "/v1/chat/completions"
         self._model = config.model
         self._timeout = config.timeout
 
@@ -530,6 +579,26 @@ def evaluate_narratives(
                     if si is None or si >= len(singletons) or not target_nid:
                         continue
                     _, singleton_fig = singletons[si]
+                    # Find the target narrative to get a member article for boundary_cos
+                    target_narrative = next((n for n in narratives if n["narrative_id"] == target_nid), None)
+                    if target_narrative and target_narrative.get("members"):
+                        target_mid = target_narrative["members"][0]
+                        target_article = articles_by_id.get(target_mid)
+                        if target_article is not None:
+                            cos = _boundary_cos(singleton_fig.boundary, target_article.boundary)
+                            if cos is not None:
+                                log_boundary_comparison(
+                                    a1_id=singleton_fig.figment_id,
+                                    a2_id=target_mid,
+                                    source1=singleton_fig.meta.get("source_id", "?"),
+                                    source2=target_article.meta.get("source_id", "?"),
+                                    title1=(singleton_fig.meta.get("title") or singleton_fig.text[:80]),
+                                    title2=(target_article.meta.get("title") or target_article.text[:80]),
+                                    boundary_cos=cos,
+                                    llm_verdict=True,
+                                    llm_reason=reason,
+                                    origin="find_missed_merges",
+                                )
                     corr_id = _make_fig_id(f"corr:{target_nid}:merge:{singleton_fig.figment_id}")
                     corr_text = f"Merge singleton {singleton_fig.figment_id[:8]} into narrative {target_nid[:8]}: {reason}"
                     correction = _upsert_correction(
@@ -555,20 +624,19 @@ def review_brief(
     brief_text: str,
     client: LLMClient,
     config: LLMConfig,
+    brief_article_count: int = 8,
 ) -> dict[str, Any]:
     """Review the world brief for accuracy and conciseness."""
     if not brief_text:
         return {"brief_acceptable": True, "brief_issues": 0}
 
-    # Get the articles used in the brief
     all_figs = store.all()
-    articles = [f for f in all_figs if f.kind == "article"]
 
     prompt = (
         f"You are a news editor reviewing a world brief.\n\n"
         f"BRIEF:\n{brief_text}\n\n"
-        f"SOURCES:\n{len(articles)} articles from multiple outlets.\n\n"
-        f"Is this brief accurate, concise (2-3 sentences), and representative of the sources?\n"
+        f"SOURCES:\n{brief_article_count} articles.\n\n"
+        f"Is this brief accurate, concise (2-3 sentences), and representative of the sources used?\n"
         f"Respond with JSON: {{\"acceptable\": true/false, \"issues\": [\"issue1\", ...]}}"
     )
     messages = [{"role": "system", "content": "You are a news editor."}, {"role": "user", "content": prompt}]
@@ -603,30 +671,75 @@ def label_article_pairs(
     articles: list[Figment],
     client: LLMClient,
     max_pairs: int = 20,
+    lineage_out: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Use LLM to label article pairs as same-event or different-event.
-    
-    Returns a list of labels: [{article1_id, article2_id, same_event: bool, reason: str}]
+
+    Returns a list of labels: [{article1_id, article2_id, same_event: bool,
+    reason: str, boundary_cos: float}]. The ``boundary_cos`` field is always
+    populated so callers can build a threshold dataset.
+
+    When ``lineage_out`` is provided, pairs are drawn preferentially from inside
+    the same candidate narrative. When all articles are singletons (all narratives
+    have size 1), pairs are biased by boundary similarity — higher similarity
+    pairs are more likely to be sampled, since those are the most informative
+    for the LLM to evaluate.
     """
     import random
-    
+
     if len(articles) < 2:
         return []
-    
-    # Sample random pairs
-    pairs = []
+
+    by_id = {a.figment_id: a for a in articles}
+    narr_members: list[set[str]] = []
+    all_singletons = True
+    if lineage_out:
+        for n in lineage_out.get("narratives", []):
+            members = set(n.get("members", []))
+            if len(members) >= 2:
+                narr_members.append(members)
+                all_singletons = False
+
+    # Build candidate pair pool
+    candidates: set[tuple[str, str]] = set()
+
+    # Within-cluster pairs (only when clusters exist)
+    for members in narr_members:
+        mlist = sorted(members)
+        for i in range(len(mlist)):
+            for j in range(i + 1, len(mlist)):
+                a, b = mlist[i], mlist[j]
+                if a in by_id and b in by_id:
+                    candidates.add(tuple(sorted((a, b))))
+
+    # Fill remaining budget with boundary-similarity-biased sampling
+    all_ids = list(by_id.keys())
     attempts = 0
-    while len(pairs) < max_pairs and attempts < max_pairs * 2:
+    while len(candidates) < max_pairs and attempts < max_pairs * 20:
         attempts += 1
-        a1, a2 = random.sample(articles, 2)
-        pair_key = tuple(sorted([a1.figment_id, a2.figment_id]))
-        if pair_key not in [(p["a1"], p["a2"]) for p in pairs]:
-            pairs.append({"a1": pair_key[0], "a2": pair_key[1], "article1": a1, "article2": a2})
-    
+        a, b = random.sample(all_ids, 2)
+        pair = tuple(sorted((a, b)))
+        if pair in candidates:
+            continue
+        if all_singletons:
+            # Rejection-sample: accept with probability proportional to boundary_cos²
+            cos = _boundary_cos(by_id[a].boundary, by_id[b].boundary)
+            if cos is not None and random.random() > cos * cos:
+                continue
+        candidates.add(pair)
+
+    pair_list = list(candidates)
+    random.shuffle(pair_list)
+    pair_list = pair_list[:max_pairs]
+
     labels = []
-    for pair in pairs:
-        a1, a2 = pair["article1"], pair["article2"]
-        
+    for a_id, b_id in pair_list:
+        a1, a2 = by_id[a_id], by_id[b_id]
+
+        # Compute boundary cosine for every pair
+        cos = _boundary_cos(a1.boundary, a2.boundary)
+        boundary_cos = cos if cos is not None else 0.0
+
         # Build prompt
         text1 = a1.text[:500] if len(a1.text) > 500 else a1.text
         text2 = a2.text[:500] if len(a2.text) > 500 else a2.text
@@ -645,21 +758,38 @@ def label_article_pairs(
         parsed = result.get("parsed", {})
         
         if "error" in result:
-            print(f"[eval] LLM error labeling pair {a1.figment_id[:8]} vs {a2.figment_id[:8]}: {result['error']}")
+            print(f"[eval] LLM error labeling pair {a_id[:8]} vs {b_id[:8]}: {result['error']}")
             continue
         
         same_event = parsed.get("same_event", False) if isinstance(parsed, dict) else False
         reason = parsed.get("reason", "") if isinstance(parsed, dict) else ""
         
+        # Log to boundary_data.jsonl for threshold analysis
+        log_boundary_comparison(
+            a1_id=a_id, a2_id=b_id,
+            source1=src1, source2=src2,
+            title1=(a1.meta.get("title") or a1.text[:80]),
+            title2=(a2.meta.get("title") or a2.text[:80]),
+            boundary_cos=boundary_cos,
+            llm_verdict=same_event,
+            llm_reason=reason,
+            origin="label_pairs",
+        )
+        
         labels.append({
-            "a1": pair["a1"],
-            "a2": pair["a2"],
+            "a1": a_id,
+            "a2": b_id,
             "same_event": same_event,
             "reason": reason,
+            "boundary_cos": boundary_cos,
         })
     
     print(f"[eval] labeled {len(labels)} article pairs with LLM")
     same_count = sum(1 for label in labels if label["same_event"])
-    print(f"[eval]   same-event: {same_count}, different-event: {len(labels) - same_count}")
+    if same_count:
+        avg_cos = sum(l["boundary_cos"] for l in labels if l["same_event"]) / same_count
+        print(f"[eval]   same-event: {same_count} (avg cos={avg_cos:.4f}), different-event: {len(labels) - same_count}")
+    else:
+        print(f"[eval]   same-event: 0, different-event: {len(labels) - same_count}")
     
     return labels
