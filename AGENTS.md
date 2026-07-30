@@ -78,8 +78,9 @@ Phase 2: SearXNG queries → sequential (each query triggers GPU ingestion)
 
 ### Pipeline (pipeline.py `run_pipeline`)
 ```
-Phase 1: Decomposition (local model) — automatically skips articles
-         already decomposed by single-pass ingest (role_figments + decomposed flags)
+Phase 1: Decomposition — automatically skips articles already
+         decomposed by single-pass ingest; uses external LLM when
+         configured, local model otherwise
 Phase 2a: Trust (CPU) + 2b: Lineage (CPU, parallel) — lineage uses role figments
 Phase 2c: LLM clustering eval → merge/split narratives
 Phase 3: Summaries (GPU, sequential, max 10 per tick)
@@ -189,7 +190,7 @@ Startup → auto-start continuous crawl (if configured)
    never call `asyncio.create_task()` from there — use `_pending_decompose` list instead
 2. **Thread safety**: `Crawler._model_lock` serializes GPU; `_ingest_lock` protects `seen`/`_new_articles`
 3. **Numpy truth value**: Never `if not array:` on numpy — use `if array is None:`
-4. **Role figment clustering**: Requires decomposition to run first; singletons + LLM merge if no roles
+4. **Role figment clustering**: Roles normally arrive at ingest (single-pass); singletons + LLM merge only when extraction returned nothing (rare — check `decode_output` logs)
 5. **Qwen3.6 thinking**: LLM puts ALL output in `reasoning_content` unless `enable_thinking: false`
 6. **SearXNG**: Requires JSON format enabled in its settings.yml; may need restart
 7. **VRAM**: 3GB GPU is tight — max 10 summaries per tick, skip brief if low VRAM
