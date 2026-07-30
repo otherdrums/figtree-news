@@ -1,0 +1,52 @@
+2026-07-30 12:10:03 [INFO] Logging to ./logs/figtree_news_20260730_121003.log
+INFO:     Started server process [170171]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[cogitate] Background worker started (interval=0.5h)
+[startup] auto-starting continuous crawl (interval=300s, max_articles=15)
+[crawl] continuous mode started (interval=300s, feeds=15)
+[crawl] tick #1 starting
+2026-07-30 12:12:31 [WARNING] Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+INFO:     127.0.0.1:42150 - "GET /api/stats HTTP/1.1" 200 OK
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights:  14%|█▍        | 56/398 [00:00<00:00, 541.16it/s]Loading weights:  28%|██▊       | 111/398 [00:00<00:00, 510.31it/s]Loading weights:  42%|████▏     | 168/398 [00:00<00:00, 526.66it/s]Loading weights:  59%|█████▉    | 234/398 [00:00<00:00, 575.45it/s]Loading weights:  76%|███████▋  | 304/398 [00:00<00:00, 619.09it/s]Loading weights:  92%|█████████▏| 368/398 [00:00<00:00, 620.62it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 589.11it/s]
+[crawl] model loaded (Qwen3-4B-bnb-4bit)
+[decompose] All background workers stopped
+[crawl] paused background decompose workers
+[cogitate] Background worker stopped
+[crawl] paused background cogitate engine
+INFO:     127.0.0.1:53776 - "GET /api/crawl/status HTTP/1.1" 200 OK
+[ingest] Single-pass roles for d5df80f1: 6 figments
+[crawler] foxnews: in_feed=15  added=1  dedup=0  short=0
+INFO:     127.0.0.1:44272 - "GET /api/stats HTTP/1.1" 200 OK
+Traceback (most recent call last):
+  File "/home/otherdrums/figtree-news/figtree_news/crawler.py", line 356, in crawl_feed
+    if self.ingest_article(source_id, art):
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/otherdrums/figtree-news/figtree_news/crawler.py", line 304, in ingest_article
+    ing_stats = ingest_articles(
+                ^^^^^^^^^^^^^^^^
+  File "/home/otherdrums/figtree-news/figtree_news/ingest.py", line 409, in ingest_articles
+    store.upsert(figments, hidden_size=hidden)
+  File "/home/otherdrums/figtree/figtree/lancedb_store.py", line 260, in upsert
+    .execute(records)
+     ^^^^^^^^^^^^^^^^
+  File "/home/otherdrums/figtree/.venv_f39/lib64/python3.12/site-packages/lancedb/merge.py", line 199, in execute
+    return self._table._do_merge(self, new_data, on_bad_vectors, fill_value)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/otherdrums/figtree/.venv_f39/lib64/python3.12/site-packages/lancedb/table.py", line 3581, in _do_merge
+    return LOOP.run(
+           ^^^^^^^^^
+  File "/home/otherdrums/figtree/.venv_f39/lib64/python3.12/site-packages/lancedb/background_loop.py", line 33, in run
+    return concurrent_future.result()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.12/concurrent/futures/_base.py", line 456, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/home/otherdrums/figtree/.venv_f39/lib64/python3.12/site-packages/lancedb/table.py", line 5269, in _do_merge
+    return await self._inner.execute_merge_insert(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: lance error: Invalid user input: Ambiguous merge inserts are prohibited: multiple source rows match the same target row on (figment_id = "af2ccf5d84405830"). Please ensure each target row is matched by at most one source row., /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lance-8.0.0/src/dataset/write/merge_insert.rs:219:40
