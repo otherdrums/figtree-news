@@ -9,18 +9,154 @@ trust propagation without any news-specific code living in the core library.
 This module additionally stamps **provenance** onto every figment returned by
 the library (``url``, ``published``, ``title``, ``first_seen``) and re-persists
 it, so the generated newspaper can always link back to the original article.
+
+Since v0.3, role figments are extracted during the same forward pass via the
+``decode_prompt_fn`` callback, eliminating a separate decompose phase.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any
 
-from figtree import FigmentStore, ingest_text_to_figments
+import numpy as np
+from figtree import Figment, FigmentStore, ingest_text_to_figments
 
 from .config import SourceRegistry
 from .search_index import get_index
+from .normalize import normalize as _norm
+
+ROLES = ['who', 'what', 'where', 'when', 'why', 'how']
+
+_ROLE_EXTRACT_INSTRUCTION = """Extract the journalistic roles from the article I provided. Follow the rules below and return ONLY a valid JSON object with these fields (use empty string for missing):
+{"who": "", "what": "", "where": "", "when": "", "why": "", "how": ""}
+
+Rules:
+- SINGLE entity only (never comma-separated lists)
+- Short canonical names (no titles, no honorifics)
+- WHAT: verb phrase (3-8 words), no grammatical subject
+- WHEN: specific time reference
+- WHY/HOW: short reason/means"""
+
+
+def _make_decode_prompt(paragraphs, kept_sentences, sentence_to_paragraph):
+    """Callback for figtree.ingest_text_to_figments decode_prompt_fn.
+
+    Returns the role-extraction instruction (build_prompt_ids in figtree
+    handles the chat template with enable_thinking=False, which pre-seeds
+    an empty closed <think> block to suppress chain-of-thought reasoning).
+    """
+    return _ROLE_EXTRACT_INSTRUCTION
+
+
+def _extract_json(text: str) -> dict[str, Any]:
+    import re
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    def _match_opener(t: str, close_pos: int) -> int:
+        depth = 1
+        p = close_pos - 1
+        while p >= 0 and depth > 0:
+            if t[p] == '}':
+                depth += 1
+            elif t[p] == '{':
+                depth -= 1
+            p -= 1
+        return p + 1 if depth == 0 else -1
+
+    pos = len(text)
+    while True:
+        brace_end = text.rfind("}", 0, pos)
+        if brace_end < 0:
+            break
+        brace_start = _match_opener(text, brace_end)
+        if brace_start < 0:
+            break
+        candidate = text[brace_start:brace_end + 1]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pos = brace_start
+    return {}
+
+
+def _first_text(val: Any) -> str:
+    if isinstance(val, list):
+        return str(val[0]).strip() if val else ""
+    return str(val).strip()
+
+
+def _parse_role_article(parsed: Any) -> dict[str, str]:
+    """Extract article-level roles from parsed JSON (flat or nested)."""
+    if not isinstance(parsed, dict):
+        return {}
+    para = parsed.get("paragraph")
+    if isinstance(para, dict):
+        return {role: _first_text(para.get(role, "")) for role in ROLES}
+    return {role: _first_text(parsed.get(role, "")) for role in ROLES}
+
+
+def _create_article_role_figments(
+    role_texts: dict[str, str],
+    article_id: str,
+    by_id: dict[str, Figment],
+    store: FigmentStore,
+) -> list[str]:
+    """Create role figments from extracted JSON at article level.
+    
+    Reuses the hash-based ID scheme so exact duplicates are auto-deduped.
+    """
+    ids: list[str] = []
+    role_figs: list[Figment] = []
+    article = by_id.get(article_id)
+    if not article:
+        return ids
+    parent_id = article_id  # roles attach at the article level
+
+    for role, text in role_texts.items():
+        if not text:
+            continue
+        normalized = _norm(text)
+        fid = hashlib.sha256(f"role:{role}:{normalized}".encode()).hexdigest()[:16]
+        existing = by_id.get(fid)
+        if existing and existing.kind == "role":
+            refs = existing.meta.get("references", [])
+            if parent_id not in refs:
+                refs.append(parent_id)
+                existing.meta["references"] = refs
+                existing.meta["reference_count"] = len(refs)
+            ids.append(existing.figment_id)
+            continue
+
+        hidden = article.boundary.shape[0]
+        fig = Figment.create(
+            text=text,
+            boundary=np.zeros(hidden, dtype=np.float32),
+            meta={
+                "role": role,
+                "parent_id": parent_id,
+                "article_id": article_id,
+                "references": [parent_id],
+                "reference_count": 1,
+                "normalized": normalized,
+            },
+            figment_id=fid,
+            kind="role",
+        )
+        role_figs.append(fig)
+        ids.append(fid)
+
+    if role_figs:
+        hidden = role_figs[0].boundary.shape[0]
+        store.upsert(role_figs, hidden_size=hidden)
+
+    return ids
 
 
 def _now_iso() -> str:
@@ -231,7 +367,28 @@ def ingest_articles(
             kv_manager=kv_manager,
             compute_kv=compute_kv,
             summarize_images=summarize_images,
+            decode_prompt_fn=_make_decode_prompt,
+            decode_max_tokens=256,
+            decode_temperature=0.0,
         )
+        # Single-pass decode_output → role figments
+        image_fig = figments[0]
+        decode_output = image_fig.meta.pop("decode_output", None)
+        role_ids: list[str] = []
+        if decode_output:
+            all_figs = store.all()
+            by_id = {f.figment_id: f for f in all_figs}
+            parsed = _extract_json(decode_output)
+            role_texts = _parse_role_article(parsed)
+            role_ids = _create_article_role_figments(
+                role_texts, image_fig.figment_id, by_id, store,
+            )
+            if role_ids:
+                image_fig.meta["role_figments"] = role_ids
+                image_fig.meta["decomposed"] = True
+                print(f"[ingest] Single-pass roles for {image_fig.figment_id[:8]}: {len(role_ids)} figments")
+            else:
+                print(f"[ingest] No roles extracted for {image_fig.figment_id[:8]}")
         if stamp_provenance:
             url = art.get("url")
             published = art.get("published")

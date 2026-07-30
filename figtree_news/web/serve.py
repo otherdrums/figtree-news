@@ -35,6 +35,7 @@ from ..crawler import Crawler
 from ..lineage import get_narratives, get_derivatives, source_agenda, _normalize_source
 from ..llm_config import LLMConfig
 from ..pipeline import run_pipeline
+from ..association_worker import AssociationWorker
 from ..query import query as run_query
 from ..search_index import get_index
 
@@ -111,6 +112,7 @@ _data_cache: dict[str, Any] = {"data": None, "ts": 0.0}
 _decompose_engine: Any = None
 _cogitate_engine: Any = None
 _pipeline_task: asyncio.Task | None = None
+_assoc_worker: AssociationWorker | None = None
 _first_crawl_done: asyncio.Event = asyncio.Event()
 _pipeline_running = False
 _crawl_state: dict[str, Any] = {
@@ -719,12 +721,19 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
     # ---- Startup/Shutdown Events ----------------------------------------- #
     @app.on_event("startup")
     async def startup_event():
-        global _decompose_engine, _cogitate_engine, _pipeline_task
+        global _decompose_engine, _cogitate_engine, _pipeline_task, _assoc_worker
         # Don't start background decompose workers yet — the first crawl
         # tick stops them anyway, and by then zombie threads may already hold
         # model_lock.  Workers are started after the first tick completes.
         if _cogitate_engine:
             _cogitate_engine.start()
+
+        # Start the association worker (CPU-only, no GPU) — merges confirmed-
+        # equivalent role variants into canonical nodes asynchronously.
+        _assoc_worker = AssociationWorker(
+            store, llm_config=llm_config, interval=10.0, max_concurrent_llm=2,
+        )
+        _assoc_worker.start()
 
         # Independent pipeline loop: keeps the UI cache fresh even when a crawl
         # tick is blocked by slow SearXNG/page fetches.
@@ -755,7 +764,7 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
 
     @app.on_event("shutdown")
     async def shutdown_event():
-        global _decompose_engine, _cogitate_engine, _pipeline_task
+        global _decompose_engine, _cogitate_engine, _pipeline_task, _assoc_worker
         _crawl_state["stop_requested"] = True
         _crawl_state["running"] = False
         if _crawl_state.get("task") and not _crawl_state["task"].done():
@@ -776,6 +785,8 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
                 worker.cancel()
         if _cogitate_engine:
             _cogitate_engine.stop()
+        if _assoc_worker:
+            await _assoc_worker.stop()
 
     # Let uvicorn handle SIGINT/SIGTERM natively. The shutdown_event above
     # is called by FastAPI's lifespan management when uvicorn stops. The

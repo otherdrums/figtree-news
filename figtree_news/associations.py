@@ -22,12 +22,9 @@ import numpy as np
 
 from figtree import Figment, FigmentStore
 
-# Characters / tokens stripped before comparison — mirrors decompose._normalize_text.
-_NORMALIZE_RE = re.compile(r"[^\w\s]")
-
-
 def _normalize(text: str) -> str:
-    return _NORMALIZE_RE.sub("", text.lower()).strip()
+    from .normalize import normalize as _norm
+    return _norm(text)
 
 
 def _boundary_sim(a: np.ndarray, b: np.ndarray) -> float:
@@ -296,6 +293,189 @@ def get_association_groups(store: FigmentStore) -> dict[str, list[str]]:
         groups[find(fid)].append(fid)
 
     return dict(groups)
+
+
+def merge_role_figments(
+    store: FigmentStore,
+    keep_id: str,
+    remove_ids: list[str],
+    all_figs: list[Figment] | None = None,
+) -> int:
+    """Merge confirmed-equivalent role figments into one canonical node.
+
+    ``keep_id`` is promoted to the canonical node (``is_association=True``).
+    Every reference to any ID in ``remove_ids`` is rewritten to point at
+    ``keep_id`` across all figment storage locations (article/paragraph
+    ``role_figments``, ``sentence.children``, relationship edges, association
+    edges, and dedup_obs). The removed rows are then deleted.
+
+    Returns the number of store mutation operations performed.
+    """
+    all_f = all_figs if all_figs is not None else store.all()
+    by_id = {f.figment_id: f for f in all_f}
+
+    keep = by_id.get(keep_id)
+    if not keep or keep.kind != "role":
+        return 0
+
+    removes = [by_id.get(rid) for rid in remove_ids if by_id.get(rid)]
+    if not removes:
+        return 0
+
+    # ── Union references ────────────────────────────────────────────────
+    all_refs: set[str] = set(keep.meta.get("references", []))
+    for r in removes:
+        all_refs.update(r.meta.get("references", []))
+    keep.meta["references"] = list(all_refs)
+    keep.meta["reference_count"] = len(all_refs)
+
+    merged_from: list[str] = keep.meta.get("merged_from", [])
+    for r in removes:
+        if r.figment_id not in merged_from:
+            merged_from.append(r.figment_id)
+    keep.meta["merged_from"] = merged_from
+    keep.meta["is_association"] = True
+
+    remove_set: set[str] = set(remove_ids)
+    mutations = 0
+
+    to_upsert: dict[str, Figment] = {keep_id: keep}
+    to_delete: set[str] = set(remove_ids)
+
+    for fig in all_f:
+        if fig.figment_id in remove_set:
+            continue
+
+        # 1. article / image meta["role_figments"]
+        if fig.kind in ("article", "image"):
+            rfs = fig.meta.get("role_figments", [])
+            new_rfs = _rewrite_list(rfs, remove_set, keep_id)
+            if new_rfs is not rfs:
+                fig.meta["role_figments"] = new_rfs
+                to_upsert[fig.figment_id] = fig
+                mutations += 1
+
+        # 2. paragraph meta["role_figments"]
+        if fig.kind == "paragraph":
+            rfs = fig.meta.get("role_figments", [])
+            new_rfs = _rewrite_list(rfs, remove_set, keep_id)
+            if new_rfs is not rfs:
+                fig.meta["role_figments"] = new_rfs
+                to_upsert[fig.figment_id] = fig
+                mutations += 1
+
+        # 3. sentence.children
+        if fig.kind == "sentence":
+            children = list(fig.children)
+            new_children = _rewrite_list(children, remove_set, keep_id)
+            if new_children is not children:
+                fig.children = new_children
+                to_upsert[fig.figment_id] = fig
+                mutations += 1
+
+        # 4. relationship edges (edge_type="relationship")
+        if fig.meta.get("edge_type") == "relationship":
+            fa = fig.meta.get("figment_a")
+            fb = fig.meta.get("figment_b")
+            if fa in remove_set or fb in remove_set:
+                old_rel_id = fig.figment_id
+                new_fa = keep_id if fa in remove_set else fa
+                new_fb = keep_id if fb in remove_set else fb
+                pair = tuple(sorted([new_fa, new_fb]))
+                new_id = hashlib.sha256(f"rel:{pair[0]}:{pair[1]}".encode()).hexdigest()[:16]
+                weight = fig.meta.get("weight", 1)
+                if new_id == old_rel_id:
+                    fig.meta["figment_a"] = new_fa
+                    fig.meta["figment_b"] = new_fb
+                    to_upsert[fig.figment_id] = fig
+                    mutations += 1
+                else:
+                    existing = by_id.get(new_id) or store.get(new_id)
+                    if existing and existing.figment_id != old_rel_id:
+                        existing.meta["weight"] = existing.meta.get("weight", 0) + weight
+                        to_upsert[existing.figment_id] = existing
+                        mutations += 1
+                    else:
+                        fig.figment_id = new_id
+                        fig.meta["figment_a"] = new_fa
+                        fig.meta["figment_b"] = new_fb
+                        fig.text = f"Relationship: {new_fa[:8]} <-> {new_fb[:8]}"
+                        to_upsert[fig.figment_id] = fig
+                        mutations += 1
+                    to_delete.add(old_rel_id)
+                    mutations += 1  # deletion
+
+        # 5. association edges (edge_type="association")
+        if fig.meta.get("edge_type") == "association":
+            links = fig.meta.get("links", [])
+            new_links = _rewrite_list(links, remove_set, keep_id)
+            if new_links is not links:
+                old_assoc_id = fig.figment_id
+                sorted_links = sorted(new_links)
+                role = keep.meta.get("role", "") or fig.meta.get("role", "")
+                new_id = hashlib.sha256(
+                    f"assoc:{role}:{sorted_links[0]}:{sorted_links[1]}".encode()
+                ).hexdigest()[:16]
+                if new_id == old_assoc_id:
+                    fig.meta["links"] = new_links
+                    to_upsert[fig.figment_id] = fig
+                    mutations += 1
+                else:
+                    existing = by_id.get(new_id) or store.get(new_id)
+                    if existing and existing.figment_id != old_assoc_id:
+                        pass  # edge already exists for new pair; skip
+                    else:
+                        fig.figment_id = new_id
+                        fig.meta["links"] = new_links
+                        fig.text = f"Association: {new_links[0][:8]} <-> {new_links[1][:8]} ({role})"
+                        to_upsert[fig.figment_id] = fig
+                        mutations += 1
+                    to_delete.add(old_assoc_id)
+                    mutations += 1  # deletion
+
+        # 6. dedup_obs (kind="dedup_obs")
+        if fig.kind == "dedup_obs":
+            role_fig_a = fig.meta.get("role_figment_a")
+            role_fig_b = fig.meta.get("role_figment_b")
+            if role_fig_a in remove_set or role_fig_b in remove_set:
+                fig.meta["role_figment_a"] = keep_id if role_fig_a in remove_set else role_fig_a
+                fig.meta["role_figment_b"] = keep_id if role_fig_b in remove_set else role_fig_b
+                to_upsert[fig.figment_id] = fig
+                mutations += 1
+
+    # ── Persist ──────────────────────────────────────────────────────────
+    hidden = keep.boundary.shape[0]
+
+    if to_upsert:
+        store.upsert(list(to_upsert.values()), hidden_size=hidden)
+
+    if to_delete:
+        for fid in to_delete:
+            try:
+                store.delete(fid)
+                mutations += 1
+            except Exception:
+                pass
+
+    return mutations
+
+
+def _rewrite_list(
+    items: list[str],
+    remove_set: set[str],
+    keep_id: str,
+) -> list[str]:
+    """Replace any ID in *remove_set* with *keep_id*, preserving order and deduplicating."""
+    result: list[str] = []
+    for item in items:
+        if item in remove_set:
+            if keep_id not in result:
+                result.append(keep_id)
+        else:
+            result.append(item)
+    if result == items:
+        return items
+    return result
 
 
 def integrate_associations(

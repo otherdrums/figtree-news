@@ -21,12 +21,14 @@ figtree_news/
 ├── cli.py              # Typer CLI: crawl, serve, search, query, lineage, export, eval, boundary-threshold
 ├── config.py           # SourceRegistry + CrawlerState + SourceConfig dataclasses
 ├── searxng.py          # SearXNG client: search → article dicts with image/video
-├── ingest.py           # Feed/article → figments with provenance
+├── ingest.py           # Feed/article → figments with provenance (+ single-pass role extraction)
 ├── crawler.py          # RSS + SearXNG + BFS link-follower (thread-safe ingestion)
 ├── pipeline.py         # Parallel pipeline orchestration (ThreadPoolExecutor)
 ├── lineage.py          # Role figment clustering (min 2 shared) + frame shift + derivative edges
 ├── trust.py            # Source trust propagation (uses FigtreeGraph, no O(n²) dedup)
-├── decompose.py        # WHO/WHAT/WHERE/WHEN/WHY/HOW extraction via local model + inline cogitation
+├── decompose.py        # Legacy per-paragraph extraction (Phase 1 fallback for non-inline articles)
+├── association_worker.py  # Background worker: merges variant role figments → canonical nodes
+├── normalize.py        # Shared entity-normalization (honorific-stripping, lowercase, punctuation-removal)
 ├── cogitate.py         # Periodic insight generation + merge/consolidation
 ├── evaluate.py         # External LLM: cluster validation, frame shift, brief review
 ├── correct.py          # Self-correction: confirmation threshold + auto-apply
@@ -70,12 +72,14 @@ figtree-news search "AI regulation" --time-range day --max 10
 ```
 Phase 1: Feeds + Seeds → asyncio.gather (all feeds + seeds in parallel)
 Phase 2: SearXNG queries → sequential (each query triggers GPU ingestion)
-Phase 3: Queue pending decompose → background pipeline loop handles the rest
+  └─ Each ingest call: single-pass forward → boundaries + role extraction
+     (decode prompt appended to the same cache, no separate decompose pass)
 ```
 
 ### Pipeline (pipeline.py `run_pipeline`)
 ```
-Phase 1: Decomposition (local model — role figments)
+Phase 1: Decomposition (local model) — automatically skips articles
+         already decomposed by single-pass ingest (role_figments + decomposed flags)
 Phase 2a: Trust (CPU) + 2b: Lineage (CPU, parallel) — lineage uses role figments
 Phase 2c: LLM clustering eval → merge/split narratives
 Phase 3: Summaries (GPU, sequential, max 10 per tick)
@@ -95,9 +99,19 @@ v0.2; singletons + LLM merge is the current design.  Boundary data is
 collected via ``--boundary-threshold`` CLI for future re-tuning.)
 
 ### Decomposition (decompose.py)
-3 async workers consume from `asyncio.Queue`. Each article decomposition includes
-**inline cogitation**: relationship edges between co-occurring role figments are
-created/strengthened immediately — no separate consolidation pass needed.
+Legacy per-paragraph extraction used as a fallback. Since v0.3, role figments are
+extracted during the ingest forward pass (single-pass decode), so decompose runs
+only for articles that predate this change or lack role_figments.
+
+### Association-Node Worker (association_worker.py)
+Runs as a background asyncio task (started in ``serve.py`` startup).  Each tick
+scans for unprocessed role figments, finds same-role candidates by heuristics
+(boundary, containment, edit similarity), and calls the external 35B LLM arbiter
+to confirm equivalence.  On confirmation, ``merge_role_figments()`` promotes the
+more-established figment to a canonical node (`is_association=True`), rewrites
+all references (article/paragraph role_figments, sentence.children, relationship
+edges, association edges, dedup_obs), and deletes the variant rows.  This keeps
+role IDs canonical — no expansion hop needed at query time.
 
 ### Auto-Crawl
 Server startup checks `sources.json` crawler state. If `continuous=true` or the
@@ -107,14 +121,14 @@ store has < 50 articles, crawling starts automatically with persisted interval
 ## Key Design Details
 
 - **Role figment clustering**: Narratives built from shared role figments, not text heuristics
-- **Decomposition before clustering**: Pipeline waits for external 35B LLM to extract roles
+- **Single-pass role extraction**: Roles are extracted during the ingest forward pass (appended decode prompt), eliminating a separate GPU pass
+- **Association-node dedup**: Confirmed-equivalent role variants are hard-replaced by a canonical node; all references rewritten, variant rows deleted
 - **Auto-crawl on startup**: Server starts continuous crawling immediately if configured
 - **Parallel feed crawling**: All feeds + seeds via asyncio.gather
 - **Sequential SearXNG**: Queries run one at a time (each triggers GPU ingestion)
 - **Thread-safe ingestion**: `Crawler._model_lock` serializes GPU, `_ingest_lock` protects shared state
 - **VRAM management**: `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, cleared per article
 - **VRAM check**: Pipeline skips summaries/brief if < 200MB GPU free
-- **Inline cogitation**: Relationship discovery during decomposition
 - **Default budget**: 15 articles per tick (1 per feed), 300s interval
 - **External LLM**: Qwen3.6-35B — must pass `chat_template_kwargs: {"enable_thinking": false}`
 - **SearXNG auto-queries**: Keywords extracted from newly ingested articles; no manual query list
@@ -139,16 +153,21 @@ Startup → auto-start continuous crawl (if configured)
     ├─ Phase 1 (parallel): Feed crawling + Seed crawling
     │   Each feed/seed → ingest_articles → figmentize → store
     │   VRAM cleared before each article ingestion
+    │   └─ Single-pass decode appends role extraction → role figments stored
     │
     ├─ Phase 2 (sequential): SearXNG queries (keywords from Phase 1)
-    │   Each query → search + fetch + ingest
+    │   Each query → search + fetch + ingest (same single-pass role extraction)
     │
     ├─ Phase 3 (pipeline):
-    │   1. Decomposition (local model) → role figments
+    │   1. Decomposition (local model) → skip already-decomposed articles
     │   2. Trust + Lineage (parallel) → role figment clustering
     │   3. Summaries (GPU, max 10)
     │   4. Brief (GPU) + Eval (I/O)
     │   5. Corrections + Brief review
+    │
+    ├─ Background (continuous):
+    │   Assoc worker → finds unprocessed role figments, confirms equivalence
+    │   via LLM arbiter, merges variants into canonical nodes (hard rewrite)
     │
     └─ Tick complete → sleep 300s → next tick
 ```
@@ -160,7 +179,7 @@ Startup → auto-start continuous crawl (if configured)
 - `"sources"`: `{source_id: {name, base_trust, url, kind, logo_url}}` — source metadata
 - `"searxng"`: `{url, enabled, categories, time_range, max_results, pages}` — SearXNG settings
   - **No `queries` field** — queries are auto-derived from RSS article keywords each tick
-- `"llm"`: `{url, model, timeout, enabled, decompose, find_missed_merges, review_brief, ...}` — external LLM config; `decompose: false` skips Phase 1 decomposition
+- `"llm"`: `{url, model, timeout, enabled, decompose, find_missed_merges, review_brief, ...}` — external LLM config; `decompose: false` skips both Phase 1 decomposition (legacy) and the association worker's LLM arbiter
 - `"crawler"`: `{continuous, smart_crawl, interval, max_articles, max_stories, llm_enabled, ...}` — **persisted crawler state**
 - Unknown domains auto-registered with `base_trust=0.7`
 
@@ -176,18 +195,23 @@ Startup → auto-start continuous crawl (if configured)
 7. **VRAM**: 3GB GPU is tight — max 10 summaries per tick, skip brief if low VRAM
 8. **Pipeline ThreadPoolExecutor**: Do not call GPU operations from pipeline thread pool — only CPU/IO work
 
-## New Capabilities (Phase 1–3)
+## New Capabilities
 
-### Association Figments (Co-Reference Layer)
+### Association Nodes (Canonical Entity Model)
 
-`associations.py` links surface-form variants of the same entity so that
-``"Donald Trump"``, ``"Trump"``, and ``"DJT"`` are treated as the same WHO node.
+`association_worker.py` merges confirmed-equivalent role variants into a single
+canonical node via ``merge_role_figments()`` in ``associations.py``.  When
+``"Donald Trump"``, ``"Trump"``, and ``"DJT"`` are confirmed to refer to the
+same entity, one is promoted to a canonical node (`is_association=True`) and
+all references (article/paragraph ``role_figments``, ``sentence.children``,
+relationship edges, association edges, dedup_obs) are rewritten to point at it.
+The variant rows are deleted.
 
-- Associations are `association` edge figments stored in LanceDB alongside everything else.
-- Auto-proposals at decompose time (boundary similarity > 0.90, string overlap > 0.50, edit similarity > 0.85).
-- Bounded expansion (default 2 hops) at query time.
-- `expand_associations(store, role_figment_id)` returns all variant IDs.
-- `get_association_groups(store)` returns all clusters.
+- **Hard replacement**: No expansion hop needed at query time — ``article.role_figments`` already holds the canonical ID.
+- **LLM arbiter**: The external 35B confirms equivalence before any merge; heuristic-only fallback when no LLM is configured.
+- **``merge_role_figments(store, keep_id, remove_ids)``**: The rewrite engine — handles all six reference locations.
+- **``AssociationWorker``**: Background asyncio task (started in ``serve.py`` startup), runs every 10s with a 2-call semaphore.
+- **Seamless with ``_cluster_by_roles``**: Clustering no longer expands associations — role IDs are already canonical.
 
 ### Multi-Role Intersection Query
 
@@ -232,6 +256,11 @@ narratives = find_narratives(store, [{"role": "who", "text": "Donald Trump"}, {"
 ctx = materialize_context(store, [n["narrative_id"] for n in narratives])
 # Feed ctx["context_text"] into FigmentGenerator.generate() for faithful, source-attributed output
 ```
+
+Because the association-node worker rewrites all references to canonical IDs,
+clustering and query both see a single shared ID per entity — no expansion
+hop needed.  ``find_narratives`` with ``expand_associations=True`` is now a
+no-op for internal logic (the parameter is kept for API compatibility).
 
 ## Bug Fixes (Phase 0)
 

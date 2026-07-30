@@ -3,9 +3,9 @@
 This module provides the core retrieval primitive for compositional queries
 like ``"every narrative involving WHO:Trump AND WHERE:Disney World"``.
 
-The query expands each role specification through the association layer
-so that surface-form variants are treated the same, then intersects the
-resulting narrative sets and ranks by trust, recency, and source diversity.
+Because the association-node worker rewrites all references to point at the
+canonical node ID, role IDs are already canonical at query time — no expansion
+hop is needed.
 """
 
 from __future__ import annotations
@@ -21,11 +21,8 @@ from .trust import get_source_trusts
 
 
 def _normalize(text: str) -> str:
-    import re
-    text = text.lower()
-    text = re.sub(r"[^\w\s]", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    from .normalize import normalize as _norm
+    return _norm(text)
 
 
 def find_role_figments(
@@ -88,7 +85,8 @@ def find_narratives(
         The LanceDB-backed store.
     roles: list of dicts with "role" (str) and "text" (str).
         Example: [{"role": "who", "text": "Donald Trump"}, {"role": "where", "text": "Disney World"}].
-    expand_associations: if True, expand each role through association edges.
+    expand_associations: kept for backward compatibility (no-op — role IDs
+        are already canonical after association-node dedup).
     require_all: if True, a narrative must contain ALL specified roles;
         if False, it must contain at least one.
     min_trust: minimum adjusted trust score for included narratives.
@@ -103,28 +101,19 @@ def find_narratives(
     all_figs = store.all()
     assign_roles_to_narratives(store, all_figs=all_figs)
 
-    # Collect the expanded role figment sets
+    # Collect role figment sets (already canonical — association-node worker
+    # rewrites all references to point at the canonical node ID, so the
+    # expand_associations flag is now a no-op.)
     expanded_roles: list[set[str]] = []
     for role_spec in roles:
         role = role_spec.get("role", "")
         text = role_spec.get("text", "")
         figments = find_role_figments(store, role, text)
         if not figments:
-            # If no role figments match, no narratives can be found for this role
             if require_all:
                 return []
             continue
-        if expand_associations:
-            from .associations import expand_associations, get_association_groups
-            groups = get_association_groups(store)
-            expanded: set[str] = set()
-            for f in figments:
-                expanded.add(f.figment_id)
-                if f.figment_id in groups:
-                    expanded.update(groups[f.figment_id])
-            expanded_roles.append(expanded)
-        else:
-            expanded_roles.append({f.figment_id for f in figments})
+        expanded_roles.append({f.figment_id for f in figments})
 
     if not expanded_roles:
         return []

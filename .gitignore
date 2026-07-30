@@ -19,6 +19,9 @@ graph.json
 eval_report.json
 seen_urls.json
 
+# Runtime data
+demo/*.jsonl
+
 # IDE
 .idea/
 .vscode/

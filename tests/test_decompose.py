@@ -12,6 +12,7 @@ import pytest
 from figtree import Figment, FigmentStore, connect
 import numpy as np
 
+from figtree_news.ingest import _parse_role_article, _first_text
 from figtree_news.decompose import (
     _build_decompose_prompt,
     _extract_json,
@@ -312,6 +313,47 @@ def test_decompose_articles_without_model_skips():
 @pytest.mark.parametrize("raw", ["not json", "{\"incomplete\":", ""])
 def test_extract_json_returns_empty_on_invalid(raw):
     assert _extract_json(raw) == {}
+
+
+def test_first_text_string():
+    assert _first_text("Trump") == "Trump"
+    assert _first_text("") == ""
+
+
+def test_first_text_list():
+    assert _first_text(["Donald Trump"]) == "Donald Trump"
+    assert _first_text(["a", "b"]) == "a"
+    assert _first_text([]) == ""
+
+
+def test_first_text_none():
+    assert _first_text(None) == "None"
+
+
+def test_parse_role_article_list_values():
+    parsed = {"who": ["Donald Trump"], "what": "visit", "where": ["Disney World"]}
+    roles = _parse_role_article(parsed)
+    assert roles["who"] == "Donald Trump"
+    assert roles["what"] == "visit"
+    assert roles["where"] == "Disney World"
+
+
+def test_parse_role_article_flat():
+    parsed = {"who": "Joe Biden", "what": "signed order"}
+    roles = _parse_role_article(parsed)
+    assert roles["who"] == "Joe Biden"
+    assert roles["what"] == "signed order"
+
+
+def test_parse_role_article_paragraph_nested():
+    parsed = {"paragraph": {"who": "Trump"}, "sentences": []}
+    roles = _parse_role_article(parsed)
+    assert roles["who"] == "Trump"
+
+
+def test_parse_role_article_not_dict():
+    assert _parse_role_article(None) == {}
+    assert _parse_role_article("hello") == {}
 
 
 def test_searxng_time_range_mapping():

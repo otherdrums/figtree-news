@@ -166,14 +166,8 @@ _HONORIFICS = re.compile(
 
 
 def _normalize_text(text: str) -> str:
-    text = text.lower().strip()
-    text = _HONORIFICS.sub('', text)
-    # remove 's / s'
-    text = re.sub(r"'s\b", '', text)
-    text = re.sub(r"s'\b", 's', text)
-    text = re.sub(r'[^\w\s]', '', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    from .normalize import normalize as _norm
+    return _norm(text)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -236,13 +230,31 @@ def _extract_json(text: str) -> dict[str, Any]:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    brace_start = text.find("{")
-    brace_end = text.rfind("}")
-    if brace_start >= 0 and brace_end > brace_start:
+
+    def _match_opener(t: str, close_pos: int) -> int:
+        depth = 1
+        p = close_pos - 1
+        while p >= 0 and depth > 0:
+            if t[p] == '}':
+                depth += 1
+            elif t[p] == '{':
+                depth -= 1
+            p -= 1
+        return p + 1 if depth == 0 else -1
+
+    pos = len(text)
+    while True:
+        brace_end = text.rfind("}", 0, pos)
+        if brace_end < 0:
+            break
+        brace_start = _match_opener(text, brace_end)
+        if brace_start < 0:
+            break
+        candidate = text[brace_start:brace_end + 1]
         try:
-            return json.loads(text[brace_start:brace_end + 1])
+            return json.loads(candidate)
         except json.JSONDecodeError:
-            pass
+            pos = brace_start
     return {}
 
 

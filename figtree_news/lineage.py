@@ -97,44 +97,24 @@ def _cluster_by_roles(
     store: FigmentStore | None,
     articles: list[Figment],
     min_shared: int = 2,
-    expand_associations: bool = True,
 ) -> list[list[Figment]]:
     """Cluster articles by shared role figments.
 
     Two articles share a narrative if they share >= min_shared role figment IDs.
-    Role figments are deduplicated by boundary cosine similarity (>= 0.90)
-    plus exact text match, so sharing a role figment ID means semantic identity.
-
-    When ``expand_associations`` is True and ``store`` is provided, each role
-    figment is expanded through association edges so that surface-form variants
-    (e.g. "Trump", "Donald Trump", "DJT") are treated as the same linking node.
+    Role figments are deduplicated by exact normalized-text hash, so sharing a
+    role figment ID means semantic identity.  When the association-node worker
+    has merged variants, all references already point at the canonical node ID,
+    so no expansion is needed.
 
     Articles without role figments (not yet decomposed) are left as singletons.
     The LLM-based split step (``split_narratives_by_llm_labels``) is the safety
     net for false positives from a low ``min_shared``.
     """
-    # Build association groups once when expanding.
-    assoc_groups: dict[str, set[str]] = {}
-    if expand_associations and store is not None:
-        try:
-            from .associations import get_association_groups
-            assoc_groups = get_association_groups(store)
-        except Exception:
-            pass
-
     by_id = {f.figment_id: f for f in articles}
     article_roles: dict[str, set[str]] = {}
 
     for f in articles:
         role_ids = set(f.meta.get("role_figments", []))
-        if expand_associations and role_ids:
-            expanded: set[str] = set()
-            for rid in role_ids:
-                if rid in assoc_groups:
-                    expanded.update(assoc_groups[rid])
-                else:
-                    expanded.add(rid)
-            role_ids = expanded
         article_roles[f.figment_id] = role_ids
 
     # ── Role filtering ────────────────────────────────────────────────────
@@ -585,9 +565,6 @@ def assign_roles_to_narratives(store: FigmentStore, *, all_figs: list | None = N
             article_id = f.meta.get("article_id")
             if not article_id or article_id not in member_set:
                 continue
-            refs = f.meta.get("references", [])
-            if member_set.isdisjoint(refs):
-                continue
             existing = f.meta.get("story_id")
             if existing == n["narrative_id"]:
                 continue
@@ -894,7 +871,7 @@ def split_narratives_by_llm_labels(
     if all_affected_articles:
         store.upsert(all_affected_articles, hidden_size=hidden_size)
 
-    print(f"[lineage] LLM split: dissolved {len(deleted_narrative_ids)} bad narratives into {len(split_summaries)} single-article narratives")
+    print(f"[lineage] LLM split: dissolved {len(split_narrative_ids)} bad narratives into {len(split_summaries)} single-article narratives")
     return {
         "narratives": split_summaries,
         "edges": len(new_derivatives),
