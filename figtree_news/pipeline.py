@@ -232,6 +232,16 @@ def run_pipeline(
     total_time = time.time() - t_start
     log.info("COMPLETE — total_time=%.1fs", total_time)
 
+    # Compact LanceDB fragments + prune old versions to keep query latency
+    # bounded (each upsert/merge creates a version; without periodic cleanup
+    # the store fragments and every store.all() becomes slower).
+    try:
+        from datetime import timedelta as _td
+        store.table.optimize(cleanup_older_than=_td(0), delete_unverified=True)
+        log.info("  store compacted")
+    except Exception as exc:
+        log.warning("  store compaction failed: %s", exc)
+
     return {
         "trust_updates": len(trust_out.get("updates", [])),
         "narratives": len(lineage_out.get("narratives", [])),

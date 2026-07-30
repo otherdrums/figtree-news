@@ -742,7 +742,8 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
         )
 
         cs = registry.crawler_state
-        auto_start = cs.continuous or (search_idx.article_count() < 50)
+        ac = search_idx.article_count()
+        auto_start = cs.continuous or (ac < 50)
         if auto_start and not _crawl_state.get("running"):
             interval = max(int(cs.interval) if cs.interval else 300, 60)
             max_arts = cs.max_articles or 100
@@ -1028,7 +1029,8 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
 
         from ..intersection import find_narratives
 
-        results = find_narratives(
+        results = await asyncio.to_thread(
+            find_narratives,
             store,
             roles=roles,
             expand_associations=body.get("expand_associations", True),
@@ -1082,7 +1084,8 @@ def create_app(db: str = "./news.lance", sources: str = "./sources.json") -> Fas
 
         from ..context import materialize_context
 
-        result = materialize_context(
+        result = await asyncio.to_thread(
+            materialize_context,
             store,
             narrative_ids,
             include_text=body.get("include_text", True),

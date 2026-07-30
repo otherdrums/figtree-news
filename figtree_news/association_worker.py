@@ -141,23 +141,34 @@ class AssociationWorker:
                 print(f"[assoc_worker] Tick error: {exc}")
             await asyncio.sleep(self.interval)
 
+    MAX_PER_TICK = 20
+
     async def _tick(self):
-        all_f = self.store.all()
+        # Load the full figment list once per tick in a worker thread so the
+        # event loop is not blocked by a synchronous store.all() on a large
+        # (potentially multi-GB) LanceDB table.
+        all_f = await asyncio.to_thread(self.store.all)
         role_figs = [
             f for f in all_f
             if f.kind == "role" and not f.meta.get("is_association")
         ]
+        processed_this_tick = 0
         for fig in role_figs:
             if fig.figment_id in self._processed:
                 continue
+            if processed_this_tick >= self.MAX_PER_TICK:
+                break
             try:
-                await self._process_one(fig)
+                await self._process_one(fig, all_f)
             except Exception as exc:
                 print(f"[assoc_worker] Error processing {fig.figment_id[:8]}: {exc}")
             self._processed.add(fig.figment_id)
+            processed_this_tick += 1
+            # Yield to the event loop so uvicorn can serve requests between
+            # figments (each _process_one may call the LLM / mutate the store).
+            await asyncio.sleep(0)
 
-    async def _process_one(self, fig: Figment):
-        all_f = self.store.all()
+    async def _process_one(self, fig: Figment, all_f: list):
         same_role = [
             f for f in all_f
             if f.kind == "role"
@@ -188,7 +199,9 @@ class AssociationWorker:
             if max_sim < 0.75:
                 return
             keep_id, remove_id = self._pick_winner(fig, best)
-            merge_role_figments(self.store, keep_id, [remove_id])
+            await asyncio.to_thread(
+                merge_role_figments, self.store, keep_id, [remove_id]
+            )
             self._processed.add(keep_id)
             self._processed.discard(remove_id)
             print(f"[assoc_worker] Heuristic merge: {keep_id[:8]} <- {remove_id[:8]} (sim={max_sim:.2f})")
@@ -200,7 +213,9 @@ class AssociationWorker:
             return
 
         keep_id, remove_id = self._pick_winner(fig, best)
-        merge_role_figments(self.store, keep_id, [remove_id])
+        await asyncio.to_thread(
+            merge_role_figments, self.store, keep_id, [remove_id]
+        )
         self._processed.add(keep_id)
         self._processed.discard(remove_id)
 
@@ -220,7 +235,7 @@ class AssociationWorker:
             {"role": "user", "content": prompt},
         ]
 
-        async def _call():
+        def _call():
             return self._llm_client.chat(messages, max_tokens=10, temperature=0.0)
 
         async with self._semaphore:
