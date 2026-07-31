@@ -149,7 +149,7 @@
     "continuous": true,
     "smart_crawl": true,
     "interval": "300",
-    "max_articles": 5,
+    "max_articles": 15,
     "max_stories": 0,
     "llm_enabled": true,
     "searxng_enabled": true,
