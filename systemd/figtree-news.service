@@ -1,0 +1,22 @@
+[Unit]
+Description=figtree-news web newspaper (crawl + pipeline + web, single process)
+Documentation=https://github.com/otherdrums/figtree-news
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__DIR__
+# One process owns the (GPU) model: crawl + pipeline + web all run inside
+# uvicorn. Use --device none for a viewer-only box that never loads the model.
+ExecStart=__PYTHON__ -m figtree_news.cli serve --db __DIR__/news.lance --sources __DIR__/sources.json --host 127.0.0.1 --port 8000 --device auto
+Restart=on-failure
+RestartSec=30
+# The server owns the GPU model; keep the OOM killer from preempting it.
+OOMScoreAdjust=200
+# MemoryGrowthLimit unset: the model is ~2.4GB on a 4GB GPU; give the process
+# plenty of RSS headroom for LanceDB + FTS + HTTP.
+MemoryMax=8G
+
+[Install]
+WantedBy=default.target

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Figtree-News sources.json",
-  "description": "Single unified configuration file for Figtree-News: sources, feeds, SearXNG, external LLM, and crawler state.",
+  "description": "Single unified configuration file for Figtree-News: sources, feeds, SearXNG, and crawler state.",
   "type": "object",
   "additionalProperties": {
     "$ref": "#/definitions/source"
@@ -43,24 +43,6 @@
         "timeout": { "type": "integer", "minimum": 1, "description": "Request timeout in seconds" }
       }
     },
-    "llm": {
-      "type": "object",
-      "description": "External LLM configuration for evaluation, decomposition, and self-correction",
-      "properties": {
-        "url": { "type": "string", "format": "uri", "description": "OpenAI-compatible API endpoint" },
-        "model": { "type": "string", "description": "Model identifier" },
-        "timeout": { "type": "integer", "minimum": 1, "description": "API request timeout in seconds" },
-        "enabled": { "type": "boolean", "description": "Master enable/disable for all LLM features" },
-        "decompose": { "type": "boolean", "description": "Use external LLM for role extraction + entity dedup arbiter" },
-        "evaluate_clusters": { "type": "boolean", "description": "LLM evaluation of narrative cluster quality" },
-        "verify_frame_shifts": { "type": "boolean", "description": "LLM verification of frame shifts in narratives" },
-        "review_brief": { "type": "boolean", "description": "LLM review of world brief quality" },
-        "auto_correct": { "type": "boolean", "description": "Auto-apply corrections suggested by LLM eval" },
-        "confirmation_threshold": { "type": "integer", "minimum": 1, "description": "Min correction figments before auto-apply" },
-        "find_missed_merges": { "type": "boolean", "description": "Search for narratives that should be merged" },
-        "missed_merge_interval": { "type": "integer", "minimum": 1, "description": "Pipeline cycles between merge checks" }
-      }
-    },
     "crawler": {
       "type": "object",
       "description": "Persisted crawler state (auto-saved after each tick)",
@@ -70,7 +52,7 @@
         "interval": { "type": ["string", "integer"], "description": "Tick interval in seconds" },
         "max_articles": { "type": "integer", "minimum": 1, "description": "Max articles per tick" },
         "max_stories": { "type": "integer", "minimum": 0, "description": "Max stories to track (0 = unlimited)" },
-        "llm_enabled": { "type": "boolean", "description": "DEPRECATED — use llm.enabled" },
+        "llm_enabled": { "type": "boolean", "description": "DEPRECATED — external LLM stack removed" },
         "searxng_enabled": { "type": "boolean", "description": "DEPRECATED — use searxng.enabled" },
         "searxng_time_range": { "type": "string", "description": "DEPRECATED — use searxng.time_range" },
         "searxng_categories": { "type": "string", "description": "DEPRECATED — use searxng.categories" },
@@ -85,7 +67,6 @@
     "feeds": { "$ref": "#/definitions/feeds" },
     "seeds": { "$ref": "#/definitions/seeds" },
     "searxng": { "$ref": "#/definitions/searxng" },
-    "llm": { "$ref": "#/definitions/llm" },
     "crawler": { "$ref": "#/definitions/crawler" }
   }
 }

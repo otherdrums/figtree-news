@@ -145,7 +145,7 @@ class Crawler:
         compute_kv: bool = False,
         summarize_images: bool = False,
         kv_manager=None,
-        decompose_engine=None,
+        fts_path: str | None = None,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -157,10 +157,8 @@ class Crawler:
         self.compute_kv = compute_kv
         self.summarize_images = summarize_images
         self.kv_manager = kv_manager
-        self.decompose_engine = decompose_engine
+        self.fts_path = fts_path
         self.seen: set[str] = self._load_seen()
-        self._pending_decompose: list[str] = []
-        self._pending_lock = threading.Lock()
         self._ingest_lock = threading.Lock()
         self._new_articles: list[dict] = []
 
@@ -285,7 +283,7 @@ class Crawler:
 
         # Title-based dedup: skip if near-duplicate title from same source exists
         title = article.get("title") or ""
-        if title and get_index().title_exists(title, source_id):
+        if title and (get_index(self.fts_path) if self.fts_path else get_index()).title_exists(title, source_id):
             if url:
                 self._mark(url)
             return False
@@ -301,7 +299,7 @@ class Crawler:
                 return False
 
         with model_lock:
-            ing_stats = ingest_articles(
+            ingest_articles(
                 self.model,
                 self.tokenizer,
                 self.store,
@@ -310,16 +308,9 @@ class Crawler:
                 compute_kv=self.compute_kv,
                 summarize_images=self.summarize_images,
                 kv_manager=self.kv_manager,
+                fts_path=self.fts_path,
             )
-        
-        # Queue for background decomposition (thread-safe: append to list,
-        # the async caller drains it after to_thread returns)
-        if self.decompose_engine and url:
-            article_ids = ing_stats.get("article_ids", [])
-            if article_ids:
-                with self._pending_lock:
-                    self._pending_decompose.append(article_ids[0])
-        
+
         if url:
             self._mark(url)
         title = article.get("title") or ""
@@ -328,13 +319,6 @@ class Crawler:
             with self._ingest_lock:
                 self._new_articles.append({"title": title, "text": text})
         return True
-
-    def drain_pending_decompose(self) -> list[str]:
-        """Return and clear the list of article IDs queued for decomposition (thread-safe)."""
-        with self._pending_lock:
-            ids = list(self._pending_decompose)
-            self._pending_decompose.clear()
-        return ids
 
     def crawl_feed(self, source_id: str, feed_uri: str, max_articles: int | None = None,
                    since: str = "", before: str = "") -> int:

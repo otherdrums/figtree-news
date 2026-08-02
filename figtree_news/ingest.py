@@ -109,8 +109,10 @@ def _create_article_role_figments(
     store: FigmentStore,
 ) -> list[str]:
     """Create role figments from extracted JSON at article level.
-    
+
     Reuses the hash-based ID scheme so exact duplicates are auto-deduped.
+    ``by_id`` is the caller's store snapshot, updated in place with any newly
+    created role figments so a batch ingestion never re-reads the whole store.
     """
     ids: list[str] = []
     role_figs: list[Figment] = []
@@ -150,6 +152,7 @@ def _create_article_role_figments(
             kind="role",
         )
         role_figs.append(fig)
+        by_id[fid] = fig
         ids.append(fid)
 
     if role_figs:
@@ -340,6 +343,7 @@ def ingest_articles(
     compute_kv: bool = False,
     summarize_images: bool = False,
     stamp_provenance: bool = True,
+    fts_path: str | None = None,
 ) -> dict[str, Any]:
     """Ingest a list of article dicts into the store.
 
@@ -347,10 +351,16 @@ def ingest_articles(
     ``stamp_provenance`` is True (default), ``url``/``published``/``title`` are
     attached to every resulting figment and re-persisted.
 
+    ``fts_path`` overrides the FTS index path (defaults to the module default).
+    The web server passes the derived ``<db>.lance -> <db>_fts.db`` path so the
+    FTS index always matches the store being written.
+
     Returns a small stats dict (article/figment counts, sources touched, urls,
     article_ids).
     """
     stats = {"articles": 0, "figments": 0, "sources": set(), "urls": [], "article_ids": []}
+    # Load the store snapshot ONCE per batch; role dedup updates it in place.
+    by_id = {f.figment_id: f for f in store.all()}
     for art in articles:
         sid = art["source_id"]
         text = art["text"]
@@ -373,11 +383,11 @@ def ingest_articles(
         )
         # Single-pass decode_output → role figments
         image_fig = figments[0]
+        for f in figments:
+            by_id.setdefault(f.figment_id, f)
         decode_output = image_fig.meta.pop("decode_output", None)
         role_ids: list[str] = []
         if decode_output:
-            all_figs = store.all()
-            by_id = {f.figment_id: f for f in all_figs}
             parsed = _extract_json(decode_output)
             role_texts = _parse_role_article(parsed)
             role_ids = _create_article_role_figments(
@@ -410,7 +420,7 @@ def ingest_articles(
 
             # Index in FTS for text search
             image_fig = figments[0]  # the image figment
-            idx = get_index()
+            idx = get_index(fts_path) if fts_path else get_index()
             idx.index_article(
                 article_id=image_fig.figment_id,
                 title=title or "",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 
 import numpy as np
+import pytest
 from figtree import Figment, FigmentStore, connect
 
 from figtree_news import lineage as lineage_mod
@@ -95,6 +96,44 @@ def test_lineage_idempotent(tmp_path):
     before = len(store.all())
     lineage_mod.compute_lineage(store)
     assert len(store.all()) == before
+
+
+def test_lineage_atomic_on_crash(tmp_path, monkeypatch):
+    """A crash during stale pruning must never leave the store with 0 narratives.
+
+    Regression for the OOM-kill bug: the old implementation deleted stale
+    lineage figments before upserting the new ones, so a process death mid-
+    rebuild left the store with no narratives at all (blank front page).
+    """
+    store = _seed_store(tmp_path)
+    lineage_mod.compute_lineage(store)
+    narrs_before = {f.figment_id for f in store.all() if f.meta.get("edge_type") == "narrative"}
+    assert narrs_before, "seed store should have at least one narrative"
+
+    # New article joins the same cluster → old narrative becomes stale, a new
+    # narrative figment gets computed.
+    who_c = _role_figment("who", "Election Commission", "c1")
+    what_c = _role_figment("what", "Election held", "c1")
+    when_c = _role_figment("when", "Thursday", "c1")
+    c = _article(
+        "npr", "Election Commission on Thursday.",
+        "Wed, 03 Jan 2024 10:00:00 GMT", "http://npr.com/1", "c1",
+        role_figment_ids=[who_c.figment_id, what_c.figment_id, when_c.figment_id],
+    )
+    store.upsert([c, who_c, what_c, when_c], hidden_size=8)
+
+    def boom(fid):
+        raise KeyboardInterrupt("simulated OOM kill during stale prune")
+
+    monkeypatch.setattr(store, "delete", boom)
+    with pytest.raises(KeyboardInterrupt):
+        lineage_mod.compute_lineage(store)
+
+    # The new narrative figment was upserted first; the stale one survived the
+    # crash. The store still renders a front page — never zero narratives.
+    narrs_after = {f.figment_id for f in store.all() if f.meta.get("edge_type") == "narrative"}
+    assert len(narrs_after) >= 1
+    assert narrs_before <= narrs_after
 
 
 def _seed_disjoint_narratives(tmp_path):

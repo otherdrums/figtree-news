@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 
 import numpy as np
-from datetime import timedelta
 from fastapi.testclient import TestClient
 from figtree import Figment, FigmentStore, connect
 
@@ -95,3 +94,17 @@ def test_api_endpoints(tmp_path):
     arts = client.get("/api/articles").json()
     assert len(arts) == 2
     assert arts[0]["url"] == "http://reuters.com/1"
+
+
+def test_viewer_mode_device_none(tmp_path):
+    """device=none: pages render, but every model-touching path is refused."""
+    store, a, b = _seed(tmp_path)
+    app = create_app(db=str(tmp_path / "news.lance"), sources=str(tmp_path / "sources.json"), device="none")
+    client = TestClient(app)
+
+    assert client.get("/").status_code == 200
+    assert client.get("/api/articles").status_code == 200
+    assert client.get("/api/query", params={"q": "election"}).status_code == 503
+    assert "error" in client.post("/api/crawl/run", json={"feeds": {"x": "http://x"}}).json()
+    assert "error" in client.post("/api/pipeline/run", json={}).json()
+    assert "error" in client.post("/api/summaries/regenerate", json={}).json()

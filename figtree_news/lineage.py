@@ -94,8 +94,8 @@ def _articles(store: FigmentStore, *, all_figs: list | None = None) -> list[Figm
 
 
 def _cluster_by_roles(
-    store: FigmentStore | None,
     articles: list[Figment],
+    all_figs: list[Figment],
     min_shared: int = 2,
 ) -> list[list[Figment]]:
     """Cluster articles by shared role figments.
@@ -106,9 +106,8 @@ def _cluster_by_roles(
     has merged variants, all references already point at the canonical node ID,
     so no expansion is needed.
 
-    Articles without role figments (not yet decomposed) are left as singletons.
-    The LLM-based split step (``split_narratives_by_llm_labels``) is the safety
-    net for false positives from a low ``min_shared``.
+    ``all_figs`` supplies the role figment texts (boilerplate/self-ref checks);
+    it must be the SAME snapshot the caller loaded — no extra store round-trips.
     """
     by_id = {f.figment_id: f for f in articles}
     article_roles: dict[str, set[str]] = {}
@@ -130,15 +129,10 @@ def _cluster_by_roles(
         source_name_map[f.figment_id] = sid
 
     role_text: dict[str, str] = {}
-    if store is not None:
-        try:
-            all_figs = store.all()
-            for f in all_figs:
-                rid = f.figment_id
-                if rid in role_df:
-                    role_text[rid] = f.text or ""
-        except Exception:
-            pass
+    for f in all_figs:
+        rid = f.figment_id
+        if rid in role_df:
+            role_text[rid] = f.text or ""
 
     n_articles = len(articles)
     df_threshold = max(5, int(0.20 * n_articles))
@@ -316,19 +310,22 @@ def _singleton_narrative(article: Figment) -> tuple[Figment, dict[str, Any]]:
 
 
 def compute_lineage(store: FigmentStore, max_stories: int = 0, all_figs: list | None = None) -> dict[str, Any]:
-    """Recompute lineage figments from the current store. Idempotent.
+    """Recompute lineage figments from the current store. Idempotent + atomic.
 
     Uses role figment clustering when available. When no roles exist (articles
-    not yet decomposed), falls back to one narrative per article — the external
-    LLM phases (Phase 2c, Phase 4b) handle merging via semantic evaluation.
+    not yet decomposed), falls back to one narrative per article.
+
+    Atomicity: the new narrative/derivative figments are fully computed and
+    upserted BEFORE any stale lineage figment is deleted, so a crash mid-rebuild
+    (OOM, Ctrl-C) can never leave the store with zero narratives. Stale figments
+    (old narrative/derivative rows not part of the new set) are removed last.
 
     Boundary similarity is NOT used for clustering decisions. It is recorded
     separately for data-collection purposes (see ``boundary_data.jsonl``).
     """
     all_figs = all_figs if all_figs is not None else store.all()
-    for f in all_figs:
-        if f.meta.get("edge_type") in ("narrative", "derivative"):
-            store.delete(f.figment_id)
+    old_lineage = [f for f in all_figs if f.meta.get("edge_type") in ("narrative", "derivative")]
+    old_by_id = {f.figment_id: f for f in old_lineage}
 
     articles = _articles(store, all_figs=all_figs)
 
@@ -337,16 +334,16 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0, all_figs: list | 
 
     if has_roles:
         print("[lineage]   Using role figment clustering")
-        clusters = _cluster_by_roles(store, articles)
+        clusters = _cluster_by_roles(articles, all_figs)
     else:
-        # No boundary fallback — create singletons and let the LLM merge them.
-        print("[lineage]   No role figments — creating singletons (LLM will merge)")
+        print("[lineage]   No role figments — creating singletons")
         clusters = [[a] for a in articles]
 
     print(f"[lineage]   {len(clusters)} clusters")
 
     figments: list[Figment] = []
     summaries: list[dict[str, Any]] = []
+    updated_articles: list[Figment] = []
 
     if not clusters:
         print("[lineage]   No clusters; falling back to one narrative per article")
@@ -355,126 +352,132 @@ def compute_lineage(store: FigmentStore, max_stories: int = 0, all_figs: list | 
             figments.append(narrative)
             summaries.append(summary)
             article.meta["first_reporter"] = True
-        if figments:
-            hidden = figments[0].boundary.shape[0]
-            store.upsert(articles, hidden_size=hidden)
-            store.upsert(figments, hidden_size=hidden)
-        return {"narratives": summaries, "edges": 0}
+            updated_articles.append(article)
+    else:
+        clusters.sort(
+            key=lambda g: max((_parse_time(f) or datetime.max.replace(tzinfo=timezone.utc)) for f in g),
+            reverse=True,
+        )
+        if max_stories > 0:
+            clusters = clusters[:max_stories]
 
-    clusters.sort(
-        key=lambda g: max((_parse_time(f) or datetime.max.replace(tzinfo=timezone.utc)) for f in g),
-        reverse=True,
-    )
-    if max_stories > 0:
-        clusters = clusters[:max_stories]
+        for group in clusters:
+            group = sorted(group, key=lambda f: _parse_time(f) or datetime.max.replace(tzinfo=timezone.utc))
+            times = [(f, _parse_time(f)) for f in group]
+            first = min(times, key=lambda ft: ft[1] or datetime.max.replace(tzinfo=timezone.utc))[0]
+            members = [f.figment_id for f in group]
+            sources = sorted({_normalize_source(f.meta.get("source_id")) for f in group})
+            key = hashlib.sha1("|".join(members).encode()).hexdigest()[:12]
+            narrative_id = f"narrative:{key}"
 
-    for group in clusters:
-        group = sorted(group, key=lambda f: _parse_time(f) or datetime.max.replace(tzinfo=timezone.utc))
-        times = [(f, _parse_time(f)) for f in group]
-        first = min(times, key=lambda ft: ft[1] or datetime.max.replace(tzinfo=timezone.utc))[0]
-        members = [f.figment_id for f in group]
-        sources = sorted({_normalize_source(f.meta.get("source_id")) for f in group})
-        key = hashlib.sha1("|".join(members).encode()).hexdigest()[:12]
-        narrative_id = f"narrative:{key}"
-
-        updated_articles: list[Figment] = []
-        for f in group:
-            if f.figment_id == first.figment_id:
-                f.meta["first_reporter"] = True
-            else:
-                f.meta["derivative_of"] = first.figment_id
-                deriv_id = f"deriv:{first.figment_id}:{f.figment_id}"
-                figments.append(
-                    Figment.create(
-                        text=f"{f.meta.get('source_id')} echoed a story first reported by "
-                             f"{first.meta.get('source_id')}",
-                        boundary=first.boundary.copy(),
-                        meta={
-                            "edge_type": "derivative",
-                            "original": first.figment_id,
-                            "original_url": first.meta.get("url"),
-                            "derivative": f.figment_id,
-                            "derivative_url": f.meta.get("url"),
-                        },
-                        figment_id=deriv_id,
-                        sources=[first.figment_id],
-                        children=[f.figment_id],
-                        kind="edge",
+            updated_articles: list[Figment] = []
+            for f in group:
+                if f.figment_id == first.figment_id:
+                    f.meta["first_reporter"] = True
+                else:
+                    f.meta["derivative_of"] = first.figment_id
+                    deriv_id = f"deriv:{first.figment_id}:{f.figment_id}"
+                    figments.append(
+                        Figment.create(
+                            text=f"{f.meta.get('source_id')} echoed a story first reported by "
+                                 f"{first.meta.get('source_id')}",
+                            boundary=first.boundary.copy(),
+                            meta={
+                                "edge_type": "derivative",
+                                "original": first.figment_id,
+                                "original_url": first.meta.get("url"),
+                                "derivative": f.figment_id,
+                                "derivative_url": f.meta.get("url"),
+                            },
+                            figment_id=deriv_id,
+                            sources=[first.figment_id],
+                            children=[f.figment_id],
+                            kind="edge",
+                        )
                     )
-                )
-            updated_articles.append(f)
+                updated_articles.append(f)
 
-        narrative_title = first.meta.get("title") or first.text.split(".")[0].strip()
+            narrative_title = first.meta.get("title") or first.text.split(".")[0].strip()
 
-        newest = group[-1]
-        frame_shift = False
-        frame_shift_score = None
-        if len(group) >= 2 and newest.figment_id != first.figment_id:
-            a = first.boundary.astype(np.float64)
-            b = newest.boundary.astype(np.float64)
-            cos_sim = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
-            frame_shift = cos_sim < 0.85
-            frame_shift_score = cos_sim
+            newest = group[-1]
+            frame_shift = False
+            frame_shift_score = None
+            if len(group) >= 2 and newest.figment_id != first.figment_id:
+                a = first.boundary.astype(np.float64)
+                b = newest.boundary.astype(np.float64)
+                cos_sim = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
+                frame_shift = cos_sim < 0.85
+                frame_shift_score = cos_sim
 
-        latest_time = max((ft[1] for ft in times if ft[1]), default=None)
-        latest_iso = latest_time.isoformat() if latest_time else ""
+            latest_time = max((ft[1] for ft in times if ft[1]), default=None)
+            latest_iso = latest_time.isoformat() if latest_time else ""
 
-        now_utc = datetime.now(timezone.utc)
-        day_ago = now_utc - timedelta(days=1)
-        new_count = sum(1 for ft in times if ft[1] and ft[1] >= day_ago)
-        first_seen_iso = now_utc.isoformat()
+            now_utc = datetime.now(timezone.utc)
+            day_ago = now_utc - timedelta(days=1)
+            new_count = sum(1 for ft in times if ft[1] and ft[1] >= day_ago)
+            first_seen_iso = now_utc.isoformat()
 
-        entities = _extract_role_entities(group, all_figs) if has_roles else []
+            entities = _extract_role_entities(group, all_figs) if has_roles else []
 
-        narrative = Figment.create(
-            text=narrative_title,
-            boundary=first.boundary.copy(),
-            meta={
-                "edge_type": "narrative",
-                "title": narrative_title,
-                "members": members,
-                "sources": sources,
-                "first_reporter": first.figment_id,
-                "first_reporter_source": first.meta.get("source_id"),
-                "first_reporter_url": first.meta.get("url"),
-                "entities": entities,
-                "frame_shift": frame_shift,
-                "frame_shift_score": frame_shift_score,
-                "frame_shift_note": (
-                    f"Boundary similarity {frame_shift_score:.2f} < 0.85 threshold "
-                    f"(first: {first.meta.get('source_id')}, latest: {newest.meta.get('source_id')})"
-                    if frame_shift else ""
-                ),
-                "latest_article_date": latest_iso,
-                "first_seen": first_seen_iso,
-                "last_updated": latest_iso,
-                "new_article_count": new_count,
-            },
-            figment_id=narrative_id,
-            kind="edge",
-        )
-        figments.append(narrative)
-        summaries.append(
-            {
-                "narrative_id": narrative_id,
-                "sources": sources,
-                "members": members,
-                "first_reporter": first.meta.get("source_id"),
-                "first_reporter_url": first.meta.get("url"),
-                "size": len(group),
-                "latest_article_date": latest_iso,
-                "first_seen": first_seen_iso,
-                "last_updated": latest_iso,
-                "new_article_count": new_count,
-            }
-        )
+            narrative = Figment.create(
+                text=narrative_title,
+                boundary=first.boundary.copy(),
+                meta={
+                    "edge_type": "narrative",
+                    "title": narrative_title,
+                    "members": members,
+                    "sources": sources,
+                    "first_reporter": first.figment_id,
+                    "first_reporter_source": first.meta.get("source_id"),
+                    "first_reporter_url": first.meta.get("url"),
+                    "entities": entities,
+                    "frame_shift": frame_shift,
+                    "frame_shift_score": frame_shift_score,
+                    "frame_shift_note": (
+                        f"Boundary similarity {frame_shift_score:.2f} < 0.85 threshold "
+                        f"(first: {first.meta.get('source_id')}, latest: {newest.meta.get('source_id')})"
+                        if frame_shift else ""
+                    ),
+                    "latest_article_date": latest_iso,
+                    "first_seen": first_seen_iso,
+                    "last_updated": latest_iso,
+                    "new_article_count": new_count,
+                },
+                figment_id=narrative_id,
+                kind="edge",
+            )
+            figments.append(narrative)
+            summaries.append(
+                {
+                    "narrative_id": narrative_id,
+                    "sources": sources,
+                    "members": members,
+                    "first_reporter": first.meta.get("source_id"),
+                    "first_reporter_url": first.meta.get("url"),
+                    "size": len(group),
+                    "latest_article_date": latest_iso,
+                    "first_seen": first_seen_iso,
+                    "last_updated": latest_iso,
+                    "new_article_count": new_count,
+                }
+            )
 
-        hidden = group[0].boundary.shape[0]
+    # ── Persist: upsert NEW figments first, delete stale lineage last ────
+    new_ids = {f.figment_id for f in figments}
+    hidden = figments[0].boundary.shape[0] if figments else (articles[0].boundary.shape[0] if articles else 1)
+    if updated_articles:
         store.upsert(updated_articles, hidden_size=hidden)
-
     if figments:
-        hidden = figments[0].boundary.shape[0]
         store.upsert(figments, hidden_size=hidden)
+
+    stale = [fid for fid in old_by_id if fid not in new_ids]
+    if stale:
+        for fid in stale:
+            try:
+                store.delete(fid)
+            except Exception:
+                pass
+        print(f"[lineage]   pruned {len(stale)} stale lineage figments")
 
     return {
         "narratives": summaries,
@@ -554,24 +557,41 @@ def source_agenda(store: FigmentStore, *, all_figs: list | None = None) -> dict[
     return agenda
 
 
-def assign_roles_to_narratives(store: FigmentStore, *, all_figs: list | None = None) -> int:
-    """Link role figments to their parent narrative via story_id meta key."""
+def assign_roles_to_narratives(
+    store: FigmentStore,
+    *,
+    all_figs: list | None = None,
+    narratives: list[dict[str, Any]] | None = None,
+) -> int:
+    """Link role figments to their parent narrative via story_id meta key.
+
+    ``narratives`` defaults to the persisted set; the pipeline passes the
+    freshly-computed lineage output so linking never runs on a stale snapshot.
+    Batches the upsert into a single store write.
+    """
     figs = all_figs if all_figs is not None else store.all()
-    narrs = get_narratives(store, all_figs=figs)
-    updated = 0
-    for n in narrs:
-        member_set = set(n["members"])
-        for f in figs:
-            article_id = f.meta.get("article_id")
-            if not article_id or article_id not in member_set:
-                continue
-            existing = f.meta.get("story_id")
-            if existing == n["narrative_id"]:
-                continue
-            f.meta["story_id"] = n["narrative_id"]
-            store.upsert([f], hidden_size=f.boundary.shape[0])
-            updated += 1
-    return updated
+    narrs = narratives if narratives is not None else get_narratives(store, all_figs=figs)
+    member_sets = [(n["narrative_id"], set(n["members"])) for n in narrs]
+    if not member_sets:
+        return 0
+
+    updated: list[Figment] = []
+    for f in figs:
+        article_id = f.meta.get("article_id")
+        if not article_id:
+            continue
+        nid = next((nid for nid, members in member_sets if article_id in members), None)
+        if not nid:
+            continue
+        if f.meta.get("story_id") == nid:
+            continue
+        f.meta["story_id"] = nid
+        updated.append(f)
+
+    if updated:
+        hidden = updated[0].boundary.shape[0]
+        store.upsert(updated, hidden_size=hidden)
+    return len(updated)
 
 
 def _rebuild_narrative_from_articles(

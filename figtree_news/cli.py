@@ -81,6 +81,11 @@ def _load_store(db: str, sources: str):
     return store, registry
 
 
+def _fts_path(db: str) -> str:
+    """FTS index path derived from the LanceDB path (must match the store)."""
+    return db.replace(".lance", "_fts.db")
+
+
 def _crawl_config(sources: str):
     """Read feeds/seeds from sources.json if present (top-level keys)."""
     feeds: dict[str, str] = {}
@@ -120,6 +125,7 @@ def ingest_feed_cmd(
     stats = ingest_mod.ingest_feed(
         model, tokenizer, store, registry, source_id, uri,
         compute_kv=compute_kv, summarize_images=summarize,
+        fts_path=_fts_path(db),
     )
     typer.echo(json.dumps(stats, indent=2))
 
@@ -138,6 +144,7 @@ def ingest_file_cmd(
     stats = ingest_mod.ingest_file(
         model, tokenizer, store, registry, path,
         compute_kv=compute_kv, summarize_images=summarize,
+        fts_path=_fts_path(db),
     )
     typer.echo(json.dumps(stats, indent=2))
 
@@ -184,6 +191,7 @@ def crawl_cmd(
         model, tokenizer, store, registry,
         seen_path=seen_path, max_depth=max_depth, max_pages=max_pages,
         compute_kv=compute_kv, summarize_images=summarize,
+        fts_path=_fts_path(db),
     )
 
     def tick():
@@ -224,18 +232,18 @@ def search_cmd(
     # Override searxng config from CLI args
     if registry.searxng:
         registry.searxng.enabled = True
-        registry.searxng.queries = [query]
         if time_range:
             registry.searxng.time_range = time_range
         if categories:
             registry.searxng.categories = categories
     else:
         registry.searxng = SearxngConfig(
-            enabled=True, queries=[query], time_range=time_range,
+            enabled=True, time_range=time_range,
             categories=categories, max_results=max_results, pages=pages,
         )
     crawler = crawler_mod.Crawler(
         model, tokenizer, store, registry, seen_path=seen_path,
+        fts_path=_fts_path(db),
     )
     added = crawler.search_searxng(
         query, categories=categories, time_range=time_range,
@@ -375,7 +383,8 @@ def boundary_threshold_cmd(
     Reads the JSONL log of boundary comparisons (a1_id, a2_id, boundary_cos,
     llm_verdict) and prints distribution statistics and threshold quality metrics.
     """
-    import json, math, statistics
+    import json
+    import statistics
     from collections import Counter
 
     path = log if log else db.replace(".lance", "_boundary_data.jsonl")
@@ -403,7 +412,7 @@ def boundary_threshold_cmd(
     unknown = [r for r in records if r.get("llm_verdict") is None]
 
     typer.echo(f"\n{'='*60}")
-    typer.echo(f"Boundary Comparison Analysis")
+    typer.echo("Boundary Comparison Analysis")
     typer.echo(f"{'='*60}")
     typer.echo(f"  Total records:      {len(records)}")
     typer.echo(f"  Same-event (merge): {len(same)}")
@@ -412,7 +421,7 @@ def boundary_threshold_cmd(
 
     if same:
         same_cos = [r["boundary_cos"] for r in same]
-        typer.echo(f"\n  SAME-EVENT boundary cosine:")
+        typer.echo("\n  SAME-EVENT boundary cosine:")
         typer.echo(f"    Mean:   {statistics.mean(same_cos):.4f}")
         typer.echo(f"    Median: {statistics.median(same_cos):.4f}")
         if len(same_cos) > 1:
@@ -422,7 +431,7 @@ def boundary_threshold_cmd(
 
     if diff:
         diff_cos = [r["boundary_cos"] for r in diff]
-        typer.echo(f"\n  DIFFERENT-EVENT boundary cosine:")
+        typer.echo("\n  DIFFERENT-EVENT boundary cosine:")
         typer.echo(f"    Mean:   {statistics.mean(diff_cos):.4f}")
         typer.echo(f"    Median: {statistics.median(diff_cos):.4f}")
         if len(diff_cos) > 1:
@@ -431,7 +440,7 @@ def boundary_threshold_cmd(
         typer.echo(f"    Max:    {max(diff_cos):.4f}")
 
     typer.echo(f"\n  {'='*50}")
-    typer.echo(f"  Threshold Quality (if used as boundary fallback)")
+    typer.echo("  Threshold Quality (if used as boundary fallback)")
     typer.echo(f"  {'='*50}")
 
     # Source diversity
@@ -451,19 +460,17 @@ def boundary_threshold_cmd(
         tp = sum(1 for r in same if r["boundary_cos"] >= t)
         fn = len(same) - tp
         fp = sum(1 for r in diff if r["boundary_cos"] >= t)
-        tn = len(diff) - fp
         prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
         f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
         typer.echo(f"  {t:>10.2f}  {prec:>10.4f}  {rec:>10.4f}  {f1:>10.4f}  {tp:>5d}  {fp:>5d}  {fn:>5d}")
 
-    typer.echo(f"\n  Best F1 threshold: ", nl=False)
+    typer.echo("\n  Best F1 threshold: ", nl=False)
     best_t, best_f1 = threshold_list[0], 0.0
     for t in threshold_list:
         tp = sum(1 for r in same if r["boundary_cos"] >= t)
         fn = len(same) - tp
         fp = sum(1 for r in diff if r["boundary_cos"] >= t)
-        tn = len(diff) - fp
         prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
         f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
@@ -474,59 +481,9 @@ def boundary_threshold_cmd(
 
     # Also show origin breakdown
     origins = Counter(r.get("origin", "?") for r in records)
-    typer.echo(f"\n  Origin breakdown:")
+    typer.echo("\n  Origin breakdown:")
     for origin, count in origins.most_common():
         typer.echo(f"    {origin:25s}: {count}")
-
-
-@app.command("purge-derived")
-def purge_derived_cmd(
-    db: str = typer.Option("./news.lance"),
-    sources: str = typer.Option(str(Path(__file__).parent.parent / "demo/sources.json")),
-):
-    """Delete role, narrative, dedup_obs, brief figments; clear article meta.
-
-    Leaves crawled articles, summaries, and text intact.
-    """
-    from figtree import FigmentStore
-    store = FigmentStore(db)
-    all_figs = store.all()
-    to_delete: list[str] = []
-    articles_changed: list[Figment] = []
-    kinds_seen: dict[str, int] = {}
-    for f in all_figs:
-        kinds_seen[f.kind] = kinds_seen.get(f.kind, 0) + 1
-        if f.kind in ("role", "narrative", "dedup_obs", "edge"):
-            to_delete.append(f.figment_id)
-        elif f.kind == "article":
-            if f.meta.get("role_figments") or f.meta.get("decomposed"):
-                f.meta["role_figments"] = []
-                f.meta["decomposed"] = False
-                # Also clear sentence/paragraph children role refs
-                f.children = [c for c in (f.children or [])]
-                articles_changed.append(f)
-    # Also delete world brief figment
-    for f in all_figs:
-        if f.kind == "brief":
-            to_delete.append(f.figment_id)
-    # Also clear role_figments on paragraphs/sentences
-    for f in all_figs:
-        if f.kind in ("paragraph", "sentence") and f.meta.get("role_figments"):
-            f.meta["role_figments"] = []
-            f.meta["decomposed"] = False
-            articles_changed.append(f)
-    typer.echo(f"Current figments by kind: {dict(sorted(kinds_seen.items()))}")
-    typer.echo(f"Deleting {len(to_delete)} derived figments")
-    typer.echo(f"Clearing decomposed status on {len(articles_changed)} articles/paragraphs/sentences")
-    for fid in to_delete:
-        try:
-            store.delete(fid)
-        except Exception as exc:
-            typer.echo(f"  delete {fid[:12]}: {exc}")
-    if articles_changed:
-        hidden = articles_changed[0].boundary.shape[0]
-        store.upsert(articles_changed, hidden_size=hidden)
-    typer.echo("Done. Next: restart the server and the pipeline will re-decompose all articles.")
 
 
 @app.command("serve")
@@ -535,14 +492,19 @@ def serve_cmd(
     sources: str = typer.Option(str(Path(__file__).parent.parent / "demo/sources.json")),
     host: str = typer.Option("127.0.0.1"),
     port: int = typer.Option(8000),
+    device: str = typer.Option("auto", "--device", help="auto|cpu|none (none = viewer-only, no model)"),
 ):
-    """Serve the interactive web newspaper (FastAPI)."""
+    """Serve the interactive web newspaper (FastAPI).
+
+    The server owns the (GPU) model and runs the crawl + pipeline loop as one
+    background task — there is no separate crawler process anymore.
+    """
     import uvicorn
 
     from .web.serve import create_app
 
     _setup_logging()
-    app_instance = create_app(db=db, sources=sources)
+    app_instance = create_app(db=db, sources=sources, device=device)
     uvicorn.run(app_instance, host=host, port=port)
 
 
